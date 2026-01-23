@@ -8,18 +8,19 @@
 #
 # Author: monyinet
 # Compatibility: Ubuntu 24.04.3 LTS (Noble Numbat)
-# Last Updated: 2026-01-20
+# Last Updated: 2026-01-23
 #
 # USAGE:
-#   curl -sSL https://raw.githubusercontent.com/your-repo/main/post-install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash
 #   OR
-#   wget -O- https://raw.githubusercontent.com/your-repo/main/post-install.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash
 #
 # IMPORTANT: Run this script as root or with sudo
 ################################################################################
 
 # Exit on error, undefined variables, and pipe failures
 set -euo pipefail
+IFS=$'\n\t'
 
 # ============================================================================
 # CONFIGURATION AND VARIABLES
@@ -35,13 +36,14 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Script metadata
-SCRIPT_VERSION="1.0.0"
-SCRIPT_NAME=$(basename "$0")
+SCRIPT_VERSION="1.0.1"
 LOG_FILE="/var/log/ubuntu-setup-$(date +%Y%m%d-%H%M%S).log"
 
 # Dry-run mode (set DRY_RUN=1 to print actions without changing the system)
 DRY_RUN="${DRY_RUN:-0}"
 AUTO_CONFIRM="${AUTO_CONFIRM:-0}"
+CHECK_ONLY="${CHECK_ONLY:-0}"
+VALIDATE_ONLY="${VALIDATE_ONLY:-0}"
 
 # User configuration
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
@@ -82,6 +84,10 @@ ALLOW_HTTPS="${ALLOW_HTTPS:-no}"
 ALLOW_FTP="${ALLOW_FTP:-no}"
 DISABLE_IPV6="${DISABLE_IPV6:-no}"
 
+# Per-run backup location for files modified by this script
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+RUN_BACKUP_DIR="${BACKUP_DIR}/run-${RUN_ID}"
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -91,11 +97,12 @@ log() {
     local level="$1"
     shift
     local message="$*"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
+    timestamp="$(date +"%Y-%m-%d %H:%M:%S")"
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo -e "[${timestamp}] [${level}] ${message}"
+        printf '%b\n' "[${timestamp}] [${level}] ${message}"
     else
-        echo -e "[${timestamp}] [${level}] ${message}" | tee -a "$LOG_FILE"
+        printf '%b\n' "[${timestamp}] [${level}] ${message}" | tee -a "$LOG_FILE"
     fi
 }
 
@@ -126,6 +133,31 @@ run_cmd() {
         return 0
     fi
     "$@"
+}
+
+ensure_run_backup_dir() {
+    if [[ "$DRY_RUN" == "1" ]]; then
+        return 0
+    fi
+    run_cmd mkdir -p "$RUN_BACKUP_DIR"
+    run_cmd chmod 700 "$RUN_BACKUP_DIR" 2>/dev/null || true
+}
+
+backup_file_if_exists() {
+    local path="$1"
+    if [[ ! -e "$path" ]]; then
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        log_info "DRY_RUN: would backup $path to $RUN_BACKUP_DIR"
+        return 0
+    fi
+    ensure_run_backup_dir
+    local rel="${path#/}"
+    local dest="${RUN_BACKUP_DIR}/${rel}"
+    run_cmd mkdir -p "$(dirname "$dest")"
+    run_cmd cp -a -- "$path" "$dest"
+    log_info "Backed up $path -> $dest"
 }
 
 # Write a file from stdin, or skip during dry-run
@@ -166,6 +198,9 @@ check_root() {
     if [[ "$DRY_RUN" == "1" ]]; then
         return 0
     fi
+    if [[ "$CHECK_ONLY" == "1" || "$VALIDATE_ONLY" == "1" ]]; then
+        return 0
+    fi
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root (use sudo)"
         exit 1
@@ -179,7 +214,7 @@ confirm_action() {
         return 0
     fi
     if [[ ! -t 0 && ! -r /dev/tty ]]; then
-        echo "Non-interactive session detected; proceeding with defaults."
+        log_info "Non-interactive session detected; proceeding with defaults."
         return 0
     fi
     local response=""
@@ -214,8 +249,7 @@ prompt_read() {
     else
         temp_input=""
     fi
-    local -n ref="$target_var"
-    ref="$temp_input"
+    printf -v "$target_var" '%s' "$temp_input"
 }
 
 # Prompt for a value with a default; skip if non-interactive
@@ -469,10 +503,45 @@ normalize_yes_no() {
     esac
 }
 
-preflight_checks() {
-    if [[ "$DRY_RUN" == "1" ]]; then
-        return 0
+is_valid_username() {
+    local username="$1"
+    [[ -n "$username" ]] || return 1
+    [[ "$username" != "root" ]] || return 1
+    [[ "$username" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+detect_ubuntu_version_id() {
+    if [[ -r /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        if [[ "${ID:-}" == "ubuntu" ]]; then
+            printf '%s' "${VERSION_ID:-}"
+            return 0
+        fi
     fi
+    return 1
+}
+
+preflight_checks() {
+    if ! is_valid_username "$ADMIN_USERNAME"; then
+        log_error "Invalid ADMIN_USERNAME '${ADMIN_USERNAME}'. Use lowercase letters/numbers/underscore/dash, start with a letter/underscore, max 32 chars, not 'root'."
+        exit 1
+    fi
+    if ! is_valid_timezone "$TIMEZONE"; then
+        log_error "Invalid TIMEZONE '${TIMEZONE}'. Use a value from 'timedatectl list-timezones' (e.g. Europe/Madrid, UTC)."
+        exit 1
+    fi
+    if [[ ! "$BACKUP_RETENTION_DAYS" =~ ^[0-9]+$ ]] || (( BACKUP_RETENTION_DAYS < 1 || BACKUP_RETENTION_DAYS > 3650 )); then
+        log_error "Invalid BACKUP_RETENTION_DAYS '${BACKUP_RETENTION_DAYS}'. Must be an integer between 1 and 3650."
+        exit 1
+    fi
+
+    local ubuntu_version_id=""
+    ubuntu_version_id="$(detect_ubuntu_version_id 2>/dev/null || true)"
+    if [[ -n "$ubuntu_version_id" && "$ubuntu_version_id" != 24.04* ]]; then
+        log_warn "This script targets Ubuntu 24.04.x; detected VERSION_ID='${ubuntu_version_id}'. Proceed with caution."
+    fi
+
     if [[ ! "$SSH_PORT" =~ ^[0-9]+$ ]] || (( SSH_PORT < 1 || SSH_PORT > 65535 )); then
         log_error "Invalid SSH_PORT '${SSH_PORT}'. Must be 1-65535."
         exit 1
@@ -488,10 +557,99 @@ preflight_checks() {
         fi
     fi
 }
+
+show_help() {
+    cat << 'EOF'
+Usage:
+  ./setup.sh [--yes] [--dry-run] [--check] [--validate] [--help] [--version]
+
+Options:
+  -y, --yes        Non-interactive (assume defaults)
+  -n, --dry-run    Print actions without changing the system
+      --check      Validate inputs and print what would run (no changes)
+      --validate   Validate inputs only (no changes)
+      --version    Print script version and exit
+  -h, --help       Show this help and exit
+
+Common environment variables:
+  ADMIN_USERNAME, ADMIN_FULLNAME, ADMIN_PASSWORDLESS_SUDO
+  TIMEZONE, SSH_PORT, SSH_PASSWORD_AUTH, SSH_PUBKEY_PATH, SSH_PUBKEY_CONTENT, GENERATE_SSH_KEYS
+  ALLOW_HTTP, ALLOW_HTTPS, ALLOW_FTP, DISABLE_IPV6, ENABLE_TIMESHIFT
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run|-n)
+                DRY_RUN=1
+                ;;
+            --yes|-y)
+                AUTO_CONFIRM=1
+                ;;
+            --check)
+                CHECK_ONLY=1
+                DRY_RUN=1
+                AUTO_CONFIRM=1
+                ;;
+            --validate)
+                VALIDATE_ONLY=1
+                DRY_RUN=1
+                AUTO_CONFIRM=1
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            --version)
+                printf '%s\n' "$SCRIPT_VERSION"
+                exit 0
+                ;;
+            *)
+                log_warn "Ignoring unknown argument: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
+print_effective_configuration() {
+    log_info "Effective configuration:"
+    log_info "  ADMIN_USERNAME=${ADMIN_USERNAME}"
+    log_info "  ADMIN_FULLNAME=${ADMIN_FULLNAME}"
+    log_info "  ADMIN_SHELL=${ADMIN_SHELL}"
+    log_info "  ADMIN_PASSWORDLESS_SUDO=${ADMIN_PASSWORDLESS_SUDO}"
+    log_info "  TIMEZONE=${TIMEZONE}"
+    log_info "  SSH_PORT=${SSH_PORT}"
+    log_info "  SSH_PASSWORD_AUTH=${SSH_PASSWORD_AUTH}"
+    log_info "  SSH_PERMIT_ROOT_LOGIN=${SSH_PERMIT_ROOT_LOGIN}"
+    log_info "  SSH_PUBKEY_PATH=${SSH_PUBKEY_PATH:-<empty>}"
+    log_info "  SSH_PUBKEY_CONTENT=${SSH_PUBKEY_CONTENT:+<set>}"
+    log_info "  GENERATE_SSH_KEYS=${GENERATE_SSH_KEYS}"
+    log_info "  ALLOW_HTTP=${ALLOW_HTTP}"
+    log_info "  ALLOW_HTTPS=${ALLOW_HTTPS}"
+    log_info "  ALLOW_FTP=${ALLOW_FTP}"
+    log_info "  DISABLE_IPV6=${DISABLE_IPV6}"
+    log_info "  ENABLE_TIMESHIFT=${ENABLE_TIMESHIFT}"
+    log_info "  BACKUP_DIR=${BACKUP_DIR}"
+    log_info "  BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}"
+}
+
+print_execution_plan() {
+    log_info "Planned actions:"
+    log_info "  - Configure timezone/locale"
+    log_info "  - Configure apt repositories and updates"
+    log_info "  - Create/secure admin user and sudo policy"
+    log_info "  - Configure SSH server and admin SSH access"
+    log_info "  - Configure UFW, Fail2Ban, and AppArmor"
+    log_info "  - Apply sysctl hardening and security tweaks"
+    log_info "  - Optional: Timeshift snapshots"
+    log_info "  - Install monitoring, audit rules, and backups"
+}
 # Check package manager availability
 check_package_manager() {
     if command -v apt-get &> /dev/null; then
-        PACKAGE_MANAGER="apt"
+        return 0
     else
         log_error "No supported package manager found (apt-get required)"
         exit 1
@@ -595,6 +753,7 @@ update_system() {
 
     # Configure unattended-upgrades
     log_info "Configuring automatic security updates..."
+    backup_file_if_exists /etc/apt/apt.conf.d/20auto-upgrades
     write_file /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
@@ -603,6 +762,7 @@ APT::Periodic::Unattended-Upgrade "1";
 EOF
 
     # Configure unattended-upgrades for security and updates
+    backup_file_if_exists /etc/apt/apt.conf.d/50unattended-upgrades
     write_file /etc/apt/apt.conf.d/50unattended-upgrades << 'EOF'
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}-security";
@@ -663,6 +823,7 @@ configure_users() {
         sudo_rule="${ADMIN_USERNAME} ALL=(ALL) NOPASSWD: ALL"
     fi
 
+    backup_file_if_exists /etc/sudoers.d/99-admin-user
     write_file /etc/sudoers.d/99-admin-user << EOF
 # Allow admin user to run all commands
 ${sudo_rule}
@@ -705,7 +866,7 @@ install_admin_ssh_key() {
 
     run_cmd mkdir -p "$ssh_dir"
     run_cmd chmod 700 "$ssh_dir"
-    run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$ssh_dir"
+    run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$ssh_dir"
 
     if [[ -s "$auth_keys" && -z "$SSH_PUBKEY_CONTENT" && ! -f "$SSH_PUBKEY_PATH" ]]; then
         log_info "Existing SSH authorized_keys found for $ADMIN_USERNAME; skipping key install"
@@ -724,7 +885,7 @@ install_admin_ssh_key() {
                 log_info "SSH public key already present in $auth_keys"
             fi
             run_cmd chmod 600 "$auth_keys"
-            run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$auth_keys"
+            run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$auth_keys"
             key_installed=1
             log_success "SSH public key installed for $ADMIN_USERNAME"
         else
@@ -742,7 +903,7 @@ install_admin_ssh_key() {
                 fi
             fi
             run_cmd chmod 600 "$auth_keys"
-            run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$auth_keys"
+            run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$auth_keys"
             key_installed=1
             log_success "SSH public key installed for $ADMIN_USERNAME"
         fi
@@ -782,7 +943,7 @@ install_admin_ssh_key() {
             echo "$input_key" >> "$auth_keys"
         fi
         run_cmd chmod 600 "$auth_keys"
-        run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$auth_keys"
+        run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$auth_keys"
         key_installed=1
         log_success "SSH public key installed for $ADMIN_USERNAME"
     fi
@@ -802,7 +963,9 @@ configure_ssh() {
 
     # Backup existing sshd_config
     if [[ -f /etc/ssh/sshd_config ]]; then
-        run_cmd cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup.$(date +%Y%m%d%H%M%S)
+        local backup_ts
+        backup_ts="$(date +%Y%m%d%H%M%S)"
+        run_cmd cp /etc/ssh/sshd_config "/etc/ssh/sshd_config.backup.${backup_ts}"
         log_info "Backed up existing sshd_config"
     fi
 
@@ -811,6 +974,7 @@ configure_ssh() {
     run_cmd ssh-keygen -A 2>/dev/null || true
 
     # Create secure sshd_config
+    backup_file_if_exists /etc/ssh/sshd_config
     write_file /etc/ssh/sshd_config << EOF
 # SSH Server Configuration - Ubuntu 24.04
 
@@ -885,6 +1049,7 @@ VersionAddendum none
 EOF
 
     # Create SSH banner
+    backup_file_if_exists /etc/ssh/banner
     write_file /etc/ssh/banner << 'EOF'
 *****************************************
 *    AUTHORIZED ACCESS ONLY             *
@@ -903,9 +1068,9 @@ EOF
     run_cmd sshd -t -f /etc/ssh/sshd_config
 
     # Create .ssh directory for admin user
-    run_cmd mkdir -p /home/${ADMIN_USERNAME}/.ssh
-    run_cmd chmod 700 /home/${ADMIN_USERNAME}/.ssh
-    run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} /home/${ADMIN_USERNAME}/.ssh
+    run_cmd mkdir -p "/home/${ADMIN_USERNAME}/.ssh"
+    run_cmd chmod 700 "/home/${ADMIN_USERNAME}/.ssh"
+    run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "/home/${ADMIN_USERNAME}/.ssh"
 
     # Restart SSH service
     log_info "Restarting SSH service..."
@@ -930,13 +1095,13 @@ generate_ssh_keys() {
     local key_file="${ssh_dir}/id_ed25519"
 
     # Generate SSH key pair
-    run_cmd sudo -u ${ADMIN_USERNAME} ssh-keygen -t ed25519 -f "$key_file" -N "" -C "${ADMIN_USERNAME}@$(hostname)"
+    run_cmd sudo -u "$ADMIN_USERNAME" ssh-keygen -t ed25519 -f "$key_file" -N "" -C "${ADMIN_USERNAME}@$(hostname)"
 
     # Set proper permissions
     run_cmd chmod 600 "$key_file"
     run_cmd chmod 644 "${key_file}.pub"
-    run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$key_file"
-    run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "${key_file}.pub"
+    run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$key_file"
+    run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "${key_file}.pub"
 
     # Add public key to authorized_keys
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -1086,7 +1251,7 @@ install_zsh_config() {
 
     # Set Zsh as default shell for admin user
     log_info "Setting Zsh as default shell for $ADMIN_USERNAME..."
-    run_cmd chsh -s /usr/bin/zsh ${ADMIN_USERNAME} 2>/dev/null || log_warn "Cannot change shell for $ADMIN_USERNAME"
+    run_cmd chsh -s /usr/bin/zsh "$ADMIN_USERNAME" 2>/dev/null || log_warn "Cannot change shell for $ADMIN_USERNAME"
     run_cmd chsh -s /usr/bin/zsh root 2>/dev/null || true
 
     # Install Oh My Zsh for admin user
@@ -1096,7 +1261,7 @@ install_zsh_config() {
         if [[ "$DRY_RUN" == "1" ]]; then
             log_info "DRY_RUN: would install Oh My Zsh for $ADMIN_USERNAME"
         else
-            run_cmd sudo -u ${ADMIN_USERNAME} sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 2>/dev/null || {
+            run_cmd sudo -u "$ADMIN_USERNAME" sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 2>/dev/null || {
                 log_warn "Failed to install Oh My Zsh, continuing with basic Zsh"
             }
         fi
@@ -1106,21 +1271,21 @@ install_zsh_config() {
 
     # Install Zsh plugins for admin user
     local plugins_dir="/home/${ADMIN_USERNAME}/.oh-my-zsh/custom/plugins"
-    run_cmd sudo -u ${ADMIN_USERNAME} mkdir -p "$plugins_dir"
+    run_cmd sudo -u "$ADMIN_USERNAME" mkdir -p "$plugins_dir"
 
     # Install zsh-autosuggestions
     if [[ ! -d "${plugins_dir}/zsh-autosuggestions" ]]; then
-        run_cmd sudo -u ${ADMIN_USERNAME} git clone https://github.com/zsh-users/zsh-autosuggestions "${plugins_dir}/zsh-autosuggestions" 2>/dev/null || true
+        run_cmd sudo -u "$ADMIN_USERNAME" git clone https://github.com/zsh-users/zsh-autosuggestions "${plugins_dir}/zsh-autosuggestions" 2>/dev/null || true
     fi
 
     # Install zsh-syntax-highlighting
     if [[ ! -d "${plugins_dir}/zsh-syntax-highlighting" ]]; then
-        run_cmd sudo -u ${ADMIN_USERNAME} git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${plugins_dir}/zsh-syntax-highlighting" 2>/dev/null || true
+        run_cmd sudo -u "$ADMIN_USERNAME" git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "${plugins_dir}/zsh-syntax-highlighting" 2>/dev/null || true
     fi
 
     # Install zsh-completions
     if [[ ! -d "${plugins_dir}/zsh-completions" ]]; then
-        run_cmd sudo -u ${ADMIN_USERNAME} git clone https://github.com/zsh-users/zsh-completions "${plugins_dir}/zsh-completions" 2>/dev/null || true
+        run_cmd sudo -u "$ADMIN_USERNAME" git clone https://github.com/zsh-users/zsh-completions "${plugins_dir}/zsh-completions" 2>/dev/null || true
     fi
 
     # Ensure admin has a .zshrc to avoid zsh-newuser-install prompt
@@ -1142,7 +1307,7 @@ EOF
 [ -f ~/.zsh_aliases ] && source ~/.zsh_aliases
 EOF
         fi
-        run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} "$admin_zshrc"
+        run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "$admin_zshrc"
         run_cmd chmod 644 "$admin_zshrc"
     fi
 
@@ -1239,8 +1404,8 @@ alias hist='history | grep'
 EOF
 
     run_cmd chmod 644 "$alias_file"
-    run_cmd cp "$alias_file" /home/${ADMIN_USERNAME}/.zsh_aliases 2>/dev/null || true
-    run_cmd chown ${ADMIN_USERNAME}:${ADMIN_USERNAME} /home/${ADMIN_USERNAME}/.zsh_aliases 2>/dev/null || true
+    run_cmd cp "$alias_file" "/home/${ADMIN_USERNAME}/.zsh_aliases" 2>/dev/null || true
+    run_cmd chown "${ADMIN_USERNAME}:${ADMIN_USERNAME}" "/home/${ADMIN_USERNAME}/.zsh_aliases" 2>/dev/null || true
 
     log_success "Custom alias file created at $alias_file"
 }
@@ -1264,7 +1429,7 @@ configure_firewall() {
     if [[ "$SSH_PORT" != "22" ]]; then
         run_cmd ufw delete allow 22/tcp 2>/dev/null || true
     fi
-    run_cmd ufw allow ${SSH_PORT}/tcp comment 'SSH'
+    run_cmd ufw allow "${SSH_PORT}/tcp" comment 'SSH'
 
     # Allow HTTP/HTTPS for web servers
     if [[ "$ALLOW_HTTP" == "yes" ]]; then
@@ -1284,11 +1449,7 @@ configure_firewall() {
 
     # Enable UFW
     log_info "Enabling firewall..."
-    if [[ "$DRY_RUN" == "1" ]]; then
-        log_info "DRY_RUN: would enable ufw"
-    else
-        echo "y" | ufw enable 2>/dev/null || ufw --force enable
-    fi
+    run_cmd ufw --force enable 2>/dev/null || true
 
     # Reload UFW
     run_cmd ufw reload
@@ -1308,6 +1469,7 @@ configure_fail2ban() {
     log_info "Configuring Fail2Ban..."
 
     # Create jail.local configuration
+    backup_file_if_exists /etc/fail2ban/jail.local
     write_file /etc/fail2ban/jail.local << 'EOF'
 [DEFAULT]
 bantime = 3600
@@ -1328,6 +1490,7 @@ findtime = 600
 EOF
 
     # Create SSHd filter
+    backup_file_if_exists /etc/fail2ban/filter.d/sshd.conf
     write_file /etc/fail2ban/filter.d/sshd.conf << 'EOF'
 [INCLUDES]
 before = common.conf
@@ -1417,7 +1580,7 @@ disable_unnecessary_services() {
         if [[ "$service" != *"ssh"* ]] && [[ "$service" != *"docker"* ]] && [[ "$service" != *"ufw"* ]] && [[ "$service" != *"fail2ban"* ]]; then
             # Check if service is necessary (basic services we want to keep)
             case "$service" in
-                systemd-.*|network-.*|dhclient|rsyslog|systemd-timesyncd|cron|auditd|rsyslog)
+                systemd-.*|network-.*|dhclient|rsyslog|systemd-timesyncd|cron|auditd)
                     ;;
                 *)
                     # Check if service has high load time or is rarely used
@@ -1440,6 +1603,7 @@ configure_sudo() {
     log_info "Configuring sudo with enhanced security..."
 
     # Create sudo configuration
+    backup_file_if_exists /etc/sudoers.d/enhanced-security
     write_file /etc/sudoers.d/enhanced-security << 'EOF'
 # Enhanced sudo security configuration
 
@@ -1470,11 +1634,10 @@ EOF
 
     # Configure sudo logging to syslog
     if ! grep -q "auth,user.info" /etc/rsyslog.d/99-sudo.conf 2>/dev/null; then
-        if [[ "$DRY_RUN" == "1" ]]; then
-            log_info "DRY_RUN: would write /etc/rsyslog.d/99-sudo.conf"
-        else
-            echo "auth,user.info     /var/log/sudo.log" > /etc/rsyslog.d/99-sudo.conf 2>/dev/null || true
-        fi
+        backup_file_if_exists /etc/rsyslog.d/99-sudo.conf
+        write_file /etc/rsyslog.d/99-sudo.conf << 'EOF'
+auth,user.info     /var/log/sudo.log
+EOF
         run_cmd systemctl restart rsyslog 2>/dev/null || true
     fi
 
@@ -1494,6 +1657,7 @@ configure_sysctl() {
     fi
 
     # Create sysctl configuration
+    backup_file_if_exists /etc/sysctl.d/99-security-hardening.conf
     write_file /etc/sysctl.d/99-security-hardening.conf << EOF
 # ===============================
 # KERNEL SECURITY HARDENING
@@ -1578,6 +1742,7 @@ configure_shell() {
     log_info "Configuring shell environment..."
 
     # Create global bashrc additions
+    backup_file_if_exists /etc/profile.d/zzz-secure-path.sh
     write_file /etc/profile.d/zzz-secure-path.sh << 'EOF'
 # Add secure path for binaries
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1585,6 +1750,7 @@ EOF
     run_cmd chmod 644 /etc/profile.d/zzz-secure-path.sh
 
     # Create global bashrc
+    backup_file_if_exists /etc/bash.bashrc
     write_file /etc/bash.bashrc << 'EOF'
 # ===================
 # GLOBAL BASHRC
@@ -1678,6 +1844,7 @@ EOF
     run_cmd chmod 644 /etc/bash.bashrc
 
     # Create global zsh profile
+    backup_file_if_exists /etc/zsh/zprofile
     write_file /etc/zsh/zprofile << 'EOF'
 # Global Zsh Profile
 
@@ -1714,6 +1881,7 @@ configure_timeshift() {
     # Configure Timeshift settings
     run_cmd mkdir -p /etc/timeshift
 
+    backup_file_if_exists /etc/timeshift/timeshift.conf
     write_file /etc/timeshift/timeshift.conf << 'EOF'
 # Timeshift configuration
 # Schedule: Daily (D), Weekly (W), Monthly (M)
@@ -1751,6 +1919,7 @@ EOF
     log_info "Creating Timeshift cron job..."
 
     # Create cron job for daily snapshots at 3 AM
+    backup_file_if_exists /etc/cron.d/timeshift-daily
     write_file /etc/cron.d/timeshift-daily << 'EOF'
 0 3 * * * root timeshift --create --tags D --comment "Automatic daily snapshot" >> /var/log/timeshift.log 2>&1
 EOF
@@ -1771,6 +1940,7 @@ create_backup_script() {
     run_cmd chmod 755 "$BACKUP_DIR"
 
     # Create backup script
+    backup_file_if_exists /usr/local/bin/backup-critical-configs.sh
     write_file /usr/local/bin/backup-critical-configs.sh << EOF
 #!/bin/bash
 # ========================================
@@ -1881,6 +2051,7 @@ EOF
     run_cmd chmod +x /usr/local/bin/backup-critical-configs.sh
 
     # Create cron job for daily backups at 4 AM
+    backup_file_if_exists /etc/cron.d/backup-critical-configs
     write_file /etc/cron.d/backup-critical-configs << 'EOF'
 0 4 * * * root /usr/local/bin/backup-critical-configs.sh >> /var/log/backup-configs.log 2>&1
 EOF
@@ -1898,6 +2069,7 @@ additional_security() {
     log_info "Applying additional security measures..."
 
     # Additional sysctl hardening
+    backup_file_if_exists /etc/sysctl.d/99-additional-hardening.conf
     write_file /etc/sysctl.d/99-additional-hardening.conf << 'EOF'
 kernel.yama.ptrace_scope = 1
 kernel.sysrq = 0
@@ -1905,11 +2077,13 @@ fs.suid_dumpable = 0
 EOF
 
     # Disable core dumps
+    backup_file_if_exists /etc/security/limits.d/99-disable-coredumps.conf
     write_file /etc/security/limits.d/99-disable-coredumps.conf << 'EOF'
 * hard core 0
 EOF
 
     # Set secure umask for all users
+    backup_file_if_exists /etc/profile.d/zzz-umask.sh
     write_file /etc/profile.d/zzz-umask.sh << 'EOF'
 umask 022
 EOF
@@ -1949,6 +2123,7 @@ configure_monitoring() {
     run_cmd apt-get install -y -qq auditd 2>/dev/null || true
 
     # Configure audit rules
+    backup_file_if_exists /etc/audit/rules.d/audit.rules
     write_file /etc/audit/rules.d/audit.rules << 'EOF'
 # Monitor privilege escalation
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/sudo -F key=priv_esc
@@ -1995,6 +2170,7 @@ EOF
     run_cmd systemctl restart auditd 2>/dev/null || true
 
     # Configure log rotation for audit logs
+    backup_file_if_exists /etc/logrotate.d/audit
     write_file /etc/logrotate.d/audit << 'EOF'
 /var/log/audit/audit.log {
     daily
@@ -2048,7 +2224,7 @@ finalize() {
     echo ""
     echo -e "${CYAN}System Information:${NC}"
     echo "  Hostname: $(hostname)"
-    echo "  OS: $(lsb_release -ds 2>/dev/null || cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2)"
+    echo "  OS: $(lsb_release -ds 2>/dev/null || grep -m1 '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2-)"
     echo "  Kernel: $(uname -r)"
     echo "  Timezone: $(timedatectl | grep Time | awk '{print $3}')"
     echo ""
@@ -2066,7 +2242,7 @@ finalize() {
     echo -e "${CYAN}Network Configuration:${NC}"
     echo "  IP Address: $(hostname -I | awk '{print $1}')"
     echo "  Default Gateway: $(ip route | grep default | awk '{print $3}')"
-    echo "  DNS: $(cat /etc/resolv.conf | grep nameserver | awk '{print $2}' | head -1)"
+    echo "  DNS: $(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null)"
     echo ""
     echo -e "${CYAN}Useful Commands:${NC}"
     echo "  View logs:          tail -f $LOG_FILE"
@@ -2095,24 +2271,14 @@ finalize() {
 # ============================================================================
 
 main() {
-    for arg in "$@"; do
-        case "$arg" in
-            --dry-run|-n)
-                DRY_RUN=1
-                ;;
-            --yes|-y)
-                AUTO_CONFIRM=1
-                ;;
-            *)
-                ;;
-        esac
-    done
+    parse_args "$@"
 
     echo ""
     echo -e "${WHITE}╔═════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║     UBUNTU 24.04 POST-INSTALL CONFIGURATION SCRIPT v${SCRIPT_VERSION}   ║${NC}"
     echo -e "${WHITE}║                                                             ║${NC}"
-    echo -e "${WHITE}║  This script will configure your Ubuntu 24.04 server with:  ║${NC}"
+    echo -e "${WHITE}║  UBUNTU 24.04.3 | POST-INSTALL CONFIGURATION SCRIPT v${SCRIPT_VERSION}  ║${NC}"
+    echo -e "${WHITE}║                                                             ║${NC}"
+    echo -e "${WHITE}║  This script will set up your Ubuntu 24.04.3 Server with:   ║${NC}"
     echo -e "${WHITE}║  - User management and SSH configuration                    ║${NC}"
     echo -e "${WHITE}║  - Repository setup (universe, multiverse, PHP PPA)         ║${NC}"
     echo -e "${WHITE}║  - Essential tools and development environment              ║${NC}"
@@ -2146,6 +2312,17 @@ main() {
     # Run all configuration steps
     initialize_environment
     preflight_checks
+    if [[ "$VALIDATE_ONLY" == "1" ]]; then
+        log_success "Validation successful (no changes made)"
+        print_effective_configuration
+        exit 0
+    fi
+    if [[ "$CHECK_ONLY" == "1" ]]; then
+        log_success "Check completed (no changes made)"
+        print_effective_configuration
+        print_execution_plan
+        exit 0
+    fi
     configure_timezone
     configure_repositories
     update_system
