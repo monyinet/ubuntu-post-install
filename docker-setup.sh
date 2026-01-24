@@ -295,16 +295,13 @@ preflight_checks() {
     if command -v docker &> /dev/null; then
         DOCKER_INSTALLED_VERSION=$(docker --version 2>/dev/null || echo "unknown")
         log_warn "Docker is already installed: $DOCKER_INSTALLED_VERSION"
+        REINSTALL_DOCKER="${REINSTALL_DOCKER:-no}"
         prompt_yes_no REINSTALL_DOCKER "Reinstall Docker? This will remove existing installation" "no"
         if [[ "$REINSTALL_DOCKER" != "yes" ]]; then
             log_info "Keeping existing Docker installation"
-            DOCKER_ALREADY_INSTALLED=1
         else
             log_info "Proceeding with reinstallation"
-            DOCKER_ALREADY_INSTALLED=0
         fi
-    else
-        DOCKER_ALREADY_INSTALLED=0
     fi
 
     # Check kernel version
@@ -372,8 +369,10 @@ configure_repositories() {
     # Set up the stable repository
     log_info "Adding Docker repository..."
     if [[ -n "$OS_CODENAME" ]]; then
+        local apt_arch
+        apt_arch="$(dpkg --print-architecture)"
         write_file /etc/apt/sources.list.d/docker.list << EOF
-deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${OS_CODENAME} stable
+deb [arch=${apt_arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${OS_CODENAME} stable
 EOF
         run_cmd chmod 644 /etc/apt/sources.list.d/docker.list
     else
@@ -458,7 +457,10 @@ install_docker_compose_standalone() {
     fi
 
     # Download Docker Compose standalone
-    local compose_url="https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-$(uname -m)"
+    local compose_arch
+    compose_arch="$(uname -m)"
+    local compose_url
+    compose_url="https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${compose_arch}"
     local compose_bin="/usr/local/bin/docker-compose"
 
     log_info "Downloading Docker Compose ${DOCKER_COMPOSE_VERSION}..."
