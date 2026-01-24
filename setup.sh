@@ -36,7 +36,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Script metadata
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.0.2"
 LOG_FILE="/var/log/ubuntu-setup-$(date +%Y%m%d-%H%M%S).log"
 
 # Dry-run mode (set DRY_RUN=1 to print actions without changing the system)
@@ -83,6 +83,8 @@ ALLOW_HTTP="${ALLOW_HTTP:-no}"
 ALLOW_HTTPS="${ALLOW_HTTPS:-no}"
 ALLOW_FTP="${ALLOW_FTP:-no}"
 DISABLE_IPV6="${DISABLE_IPV6:-no}"
+RUN_DOCKER_SETUP="${RUN_DOCKER_SETUP:-no}"
+DOCKER_SETUP_URL="${DOCKER_SETUP_URL:-https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh}"
 
 # Per-run backup location for files modified by this script
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
@@ -483,6 +485,7 @@ prompt_configuration() {
     prompt_yes_no ALLOW_FTP "Open FTP port 21 (yes/no)" "$ALLOW_FTP"
     prompt_yes_no DISABLE_IPV6 "Disable IPv6 (yes/no)" "$DISABLE_IPV6"
     prompt_yes_no ENABLE_TIMESHIFT "Enable Timeshift snapshots (yes/no)" "$ENABLE_TIMESHIFT"
+    prompt_yes_no RUN_DOCKER_SETUP "Install and configure Docker (yes/no)" "$RUN_DOCKER_SETUP"
 
     log_info "Selected SSH port: $SSH_PORT"
 }
@@ -561,13 +564,15 @@ preflight_checks() {
 show_help() {
     cat << 'EOF'
 Usage:
-  ./setup.sh [--yes] [--dry-run] [--check] [--validate] [--help] [--version]
+  ./setup.sh [--yes] [--dry-run] [--check] [--validate] [--docker] [--no-docker] [--help] [--version]
 
 Options:
   -y, --yes        Non-interactive (assume defaults)
   -n, --dry-run    Print actions without changing the system
       --check      Validate inputs and print what would run (no changes)
       --validate   Validate inputs only (no changes)
+      --docker     Also install/configure Docker via docker-setup.sh
+      --no-docker  Skip Docker even if RUN_DOCKER_SETUP=yes
       --version    Print script version and exit
   -h, --help       Show this help and exit
 
@@ -575,6 +580,7 @@ Common environment variables:
   ADMIN_USERNAME, ADMIN_FULLNAME, ADMIN_PASSWORDLESS_SUDO
   TIMEZONE, SSH_PORT, SSH_PASSWORD_AUTH, SSH_PUBKEY_PATH, SSH_PUBKEY_CONTENT, GENERATE_SSH_KEYS
   ALLOW_HTTP, ALLOW_HTTPS, ALLOW_FTP, DISABLE_IPV6, ENABLE_TIMESHIFT
+  RUN_DOCKER_SETUP, DOCKER_SETUP_URL
 EOF
 }
 
@@ -596,6 +602,12 @@ parse_args() {
                 VALIDATE_ONLY=1
                 DRY_RUN=1
                 AUTO_CONFIRM=1
+                ;;
+            --docker)
+                RUN_DOCKER_SETUP=yes
+                ;;
+            --no-docker)
+                RUN_DOCKER_SETUP=no
                 ;;
             --help|-h)
                 show_help
@@ -631,6 +643,8 @@ print_effective_configuration() {
     log_info "  ALLOW_FTP=${ALLOW_FTP}"
     log_info "  DISABLE_IPV6=${DISABLE_IPV6}"
     log_info "  ENABLE_TIMESHIFT=${ENABLE_TIMESHIFT}"
+    log_info "  RUN_DOCKER_SETUP=${RUN_DOCKER_SETUP}"
+    log_info "  DOCKER_SETUP_URL=${DOCKER_SETUP_URL}"
     log_info "  BACKUP_DIR=${BACKUP_DIR}"
     log_info "  BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}"
 }
@@ -642,9 +656,41 @@ print_execution_plan() {
     log_info "  - Create/secure admin user and sudo policy"
     log_info "  - Configure SSH server and admin SSH access"
     log_info "  - Configure UFW, Fail2Ban, and AppArmor"
+    log_info "  - Optional: Docker installation/config"
     log_info "  - Apply sysctl hardening and security tweaks"
     log_info "  - Optional: Timeshift snapshots"
     log_info "  - Install monitoring, audit rules, and backups"
+}
+
+run_docker_setup() {
+    if [[ "$RUN_DOCKER_SETUP" != "yes" ]]; then
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "1" ]]; then
+        log_info "DRY_RUN: would run docker-setup.sh (RUN_DOCKER_SETUP=yes)"
+        return 0
+    fi
+
+    log_info "Running Docker setup via docker-setup.sh..."
+
+    local docker_script=""
+    local tmp_script=""
+    if [[ -f "./docker-setup.sh" ]]; then
+        docker_script="./docker-setup.sh"
+    elif [[ -n "${BASH_SOURCE[0]:-}" && -f "$(dirname "${BASH_SOURCE[0]}")/docker-setup.sh" ]]; then
+        docker_script="$(dirname "${BASH_SOURCE[0]}")/docker-setup.sh"
+    else
+        tmp_script="$(mktemp /tmp/docker-setup.XXXXXX.sh)"
+        run_cmd curl -fsSL "$DOCKER_SETUP_URL" -o "$tmp_script"
+        run_cmd chmod +x "$tmp_script"
+        docker_script="$tmp_script"
+    fi
+
+    run_cmd env \
+        ADMIN_USERNAME="$ADMIN_USERNAME" \
+        DRY_RUN="$DRY_RUN" \
+        AUTO_CONFIRM=1 \
+        bash "$docker_script" --yes
 }
 # Check package manager availability
 check_package_manager() {
@@ -2308,6 +2354,7 @@ main() {
     normalize_yes_no ALLOW_FTP
     normalize_yes_no DISABLE_IPV6
     normalize_yes_no ENABLE_TIMESHIFT
+    normalize_yes_no RUN_DOCKER_SETUP
 
     # Run all configuration steps
     initialize_environment
@@ -2336,6 +2383,11 @@ main() {
     install_zsh_config
     create_alias_file
     configure_firewall
+    if [[ "$RUN_DOCKER_SETUP" == "yes" ]]; then
+        run_docker_setup
+    else
+        log_info "Docker setup is disabled (set RUN_DOCKER_SETUP=yes or pass --docker to enable)"
+    fi
     configure_fail2ban
     configure_apparmor
     disable_unnecessary_services

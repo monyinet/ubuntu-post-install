@@ -38,6 +38,31 @@ curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/s
 curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash -s -- --validate
 ```
 
+## Docker (Optional)
+
+Run Docker setup as part of the main script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash -s -- --yes --docker
+```
+
+Run Docker setup standalone:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh | bash -s -- --yes
+```
+
+Common Docker overrides:
+
+```bash
+ADMIN_USERNAME=admin \
+DOCKER_DATA_ROOT=/var/lib/docker \
+INSTALL_PORTRAINER=no \
+RESTRICT_METADATA_SERVICE=yes \
+DOCKER_METRICS_ADDR=127.0.0.1:9323 \
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh | bash -s -- --yes
+```
+
 Cache-buster (if you hit CDN cache):
 
 ```bash
