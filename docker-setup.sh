@@ -316,10 +316,15 @@ preflight_checks() {
         log_warn "Running inside a Docker container. Some features may not work correctly."
     fi
 
-    # Check available disk space
-    AVAILABLE_SPACE=$(df -BG /var/lib/docker 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
-    if [[ -n "$AVAILABLE_SPACE" && "$AVAILABLE_SPACE" -lt 10 ]]; then
-        log_warn "Low disk space on /var/lib/docker (${AVAILABLE_SPACE}GB remaining)"
+    # Check available disk space (avoid failing if /var/lib/docker doesn't exist yet)
+    local df_target="/var/lib"
+    if [[ -d /var/lib/docker ]]; then
+        df_target="/var/lib/docker"
+    fi
+    local available_space=""
+    available_space="$(df -BG "$df_target" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}' || true)"
+    if [[ -n "$available_space" && "$available_space" =~ ^[0-9]+$ && "$available_space" -lt 10 ]]; then
+        log_warn "Low disk space on ${df_target} (${available_space}GB remaining)"
     fi
 
     # Validate Docker data root path if specified
@@ -328,9 +333,10 @@ preflight_checks() {
             log_info "Creating Docker data directory: $DOCKER_DATA_ROOT"
             run_cmd mkdir -p "$DOCKER_DATA_ROOT"
         fi
-        AVAILABLE_DATA_SPACE=$(df -BG "$(dirname "$DOCKER_DATA_ROOT")" 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//')
-        if [[ -n "$AVAILABLE_DATA_SPACE" && "$AVAILABLE_DATA_SPACE" -lt 20 ]]; then
-            log_warn "Low disk space for Docker data directory (${AVAILABLE_DATA_SPACE}GB remaining)"
+        local available_data_space=""
+        available_data_space="$(df -BG "$(dirname "$DOCKER_DATA_ROOT")" 2>/dev/null | awk 'NR==2 {gsub(/G/,"",$4); print $4}' || true)"
+        if [[ -n "$available_data_space" && "$available_data_space" =~ ^[0-9]+$ && "$available_data_space" -lt 20 ]]; then
+            log_warn "Low disk space for Docker data directory (${available_data_space}GB remaining)"
         fi
     fi
 
@@ -366,9 +372,9 @@ configure_repositories() {
     # Set up the stable repository
     log_info "Adding Docker repository..."
     if [[ -n "$OS_CODENAME" ]]; then
-        echo \
-            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${OS_CODENAME} stable" \
-            > /etc/apt/sources.list.d/docker.list
+        write_file /etc/apt/sources.list.d/docker.list << EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${OS_CODENAME} stable
+EOF
         run_cmd chmod 644 /etc/apt/sources.list.d/docker.list
     else
         log_error "Cannot determine OS codename"
