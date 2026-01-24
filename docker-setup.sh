@@ -35,7 +35,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Script metadata
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.3.0"
 LOG_FILE="/var/log/docker-setup-$(date +%Y%m%d-%H%M%S).log"
 
 # Dry-run mode
@@ -719,14 +719,20 @@ configure_firewall() {
 
     # Check if UFW is installed and active
     if command -v ufw &> /dev/null && ufw status 2>/dev/null | grep -q "active"; then
-        log_info "UFW is active, configuring Docker rules..."
+        log_info "UFW is active; applying Docker-related rules (if needed)..."
+        local ufw_rules_added=0
 
-        # Allow portainer if installed
+        # Allow Portainer if installed
         if [[ "$INSTALL_PORTRAINER" == "yes" ]]; then
             run_cmd ufw allow 9443/tcp comment 'Portainer HTTPS' 2>/dev/null || true
+            ufw_rules_added=1
         fi
 
-        log_info "UFW rules added for Docker"
+        if [[ "$ufw_rules_added" == "1" ]]; then
+            log_info "UFW rule(s) added for Docker-related services"
+        else
+            log_info "No UFW rules needed (Docker manages iptables rules automatically)"
+        fi
     else
         log_info "UFW not active, skipping UFW configuration"
     fi
@@ -756,9 +762,9 @@ configure_networking() {
         return 0
     fi
 
-    # Create Docker bridge network if not exists
-    if ! docker network ls | grep -q "^bridge "; then
-        log_warn "Default bridge network not found, but docker0 should exist"
+    # Check default bridge network
+    if ! docker network inspect bridge &>/dev/null; then
+        log_warn "Default bridge network 'bridge' not found (unexpected); continuing"
     fi
 
     # Create custom bridge network for applications
@@ -1212,7 +1218,11 @@ finalize() {
     echo "  Data directory: ${DOCKER_DATA_ROOT:-/var/lib/docker}"
     echo "  Log driver: json-file"
     echo "  Storage driver: overlay2"
-    echo "  Metrics endpoint: 0.0.0.0:9323"
+    if [[ -n "${DOCKER_METRICS_ADDR:-}" ]]; then
+        echo "  Metrics endpoint: ${DOCKER_METRICS_ADDR}"
+    else
+        echo "  Metrics endpoint: disabled"
+    fi
     echo ""
     echo -e "${CYAN}User Configuration:${NC}"
     echo "  Admin user: $ADMIN_USERNAME"
@@ -1265,18 +1275,18 @@ main() {
     done
 
     echo ""
-    echo -e "${WHITE}╔═════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║         DOCKER INSTALLATION SCRIPT v${SCRIPT_VERSION}               ║${NC}"
-    echo -e "${WHITE}║                                                             ║${NC}"
-    echo -e "${WHITE}║  This script will install and configure Docker with:       ║${NC}"
-    echo -e "${WHITE}║  - Docker Engine and Docker Compose v2                     ║${NC}"
-    echo -e "${WHITE}║  - Security hardening (AppArmor, seccomp, namespaces)      ║${NC}"
-    echo -e "${WHITE}║  - Optimized daemon configuration                         ║${NC}"
-    echo -e "${WHITE}║  - Firewall rules for Docker ports                        ║${NC}"
-    echo -e "${WHITE}║  - Monitoring and backup automation                       ║${NC}"
-    echo -e "${WHITE}║  - Custom aliases and completions                         ║${NC}"
-    echo -e "${WHITE}║                                                             ║${NC}"
-    echo -e "${WHITE}╚═════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "${WHITE}╔════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${WHITE}║         DOCKER INSTALLATION SCRIPT v${SCRIPT_VERSION}              ║${NC}"
+    echo -e "${WHITE}║                                                        ║${NC}"
+    echo -e "${WHITE}║  This script will install and configure Docker with:   ║${NC}"
+    echo -e "${WHITE}║  - Docker Engine and Docker Compose v2                 ║${NC}"
+    echo -e "${WHITE}║  - Security hardening (AppArmor, seccomp, namespaces)  ║${NC}"
+    echo -e "${WHITE}║  - Optimized daemon configuration                      ║${NC}"
+    echo -e "${WHITE}║  - Firewall rules for Docker ports                     ║${NC}"
+    echo -e "${WHITE}║  - Monitoring and backup automation                    ║${NC}"
+    echo -e "${WHITE}║  - Custom aliases and completions                      ║${NC}"
+    echo -e "${WHITE}║                                                        ║${NC}"
+    echo -e "${WHITE}╚════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     # Confirm before proceeding
