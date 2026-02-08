@@ -85,9 +85,9 @@ log() {
     local timestamp
     timestamp="$(date +"%Y-%m-%d %H:%M:%S")"
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo -e "[${timestamp}] [${level}] ${message}"
+        printf '%b\n' "[${timestamp}] [${level}] ${message}"
     else
-        echo -e "[${timestamp}] [${level}] ${message}" | tee -a "$LOG_FILE"
+        printf '%b\n' "[${timestamp}] [${level}] ${message}" | tee -a "$LOG_FILE"
     fi
 }
 
@@ -241,6 +241,7 @@ check_package_manager() {
 # Detect OS version
 detect_os() {
     if [[ -f /etc/os-release ]]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         OS_ID="${ID:-}"
         OS_VERSION="${VERSION_ID:-}"
@@ -583,7 +584,7 @@ configure_docker_daemon() {
 
     # Backup existing daemon.json
     if [[ -f /etc/docker/daemon.json ]]; then
-        run_cmd cp /etc/docker/daemon.json /etc/docker/daemon.json.backup.$(date +%Y%m%d%H%M%S)
+        run_cmd cp /etc/docker/daemon.json "/etc/docker/daemon.json.backup.$(date +%Y%m%d%H%M%S)"
         log_info "Backed up existing daemon.json"
     fi
 
@@ -848,49 +849,49 @@ echo "       DOCKER MONITORING REPORT         "
 echo "========================================"
 echo ""
 
-echo -e "${CYAN}Docker Version:${NC}"
+printf '%b\n' "${CYAN}Docker Version:${NC}"
 docker --version
 echo ""
 
-echo -e "${CYAN}Docker Compose Version:${NC}"
+printf '%b\n' "${CYAN}Docker Compose Version:${NC}"
 docker compose version 2>/dev/null || docker-compose --version 2>/dev/null || echo "Not installed"
 echo ""
 
-echo -e "${CYAN}Container Summary:${NC}"
+printf '%b\n' "${CYAN}Container Summary:${NC}"
 docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}" | head -20
 echo ""
 
-echo -e "${CYAN}Container Statistics:${NC}"
+printf '%b\n' "${CYAN}Container Statistics:${NC}"
 docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}" | head -10
 echo ""
 
-echo -e "${CYAN}Image Summary:${NC}"
+printf '%b\n' "${CYAN}Image Summary:${NC}"
 docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}" | head -15
 echo ""
 
-echo -e "${CYAN}Volume Summary:${NC}"
+printf '%b\n' "${CYAN}Volume Summary:${NC}"
 docker volume ls
 echo ""
 
-echo -e "${CYAN}Network Summary:${NC}"
+printf '%b\n' "${CYAN}Network Summary:${NC}"
 docker network ls
 echo ""
 
-echo -e "${CYAN}System Info:${NC}"
+printf '%b\n' "${CYAN}System Info:${NC}"
 docker info --format 'Driver: {{.Driver}}' 2>/dev/null
 docker info --format 'Data Space: {{.DriverStatus}}' 2>/dev/null | head -1
 echo ""
 
-echo -e "${CYAN}Docker Disk Usage:${NC}"
+printf '%b\n' "${CYAN}Docker Disk Usage:${NC}"
 docker system df
 echo ""
 
-echo -e "${YELLOW}Container Health Status:${NC}"
+printf '%b\n' "${YELLOW}Container Health Status:${NC}"
 docker ps --format '{{.Names}}\t{{.Status}}' | while IFS=$'\t' read -r name status; do
     if echo "$status" | grep -q "Up"; then
-        echo -e "  ${name}: ${GREEN}${status}${NC}"
+        printf '  %s: %b%s%b\n' "$name" "$GREEN" "$status" "$NC"
     else
-        echo -e "  ${name}: ${RED}${status}${NC}"
+        printf '  %s: %b%s%b\n' "$name" "$RED" "$status" "$NC"
     fi
 done
 
@@ -943,7 +944,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 log() {
-    echo -e "[\$(date +'%Y-%m-%d %H:%M:%S')] \$1"
+    printf '%b\n' "[\$(date +'%Y-%m-%d %H:%M:%S')] \$1"
 }
 
 log_info() { log "${GREEN}[INFO]${NC} \$1"; }
@@ -1177,10 +1178,10 @@ EOF
     run_cmd cp /etc/docker/docker-aliases.sh /etc/skel/.docker-aliases 2>/dev/null || true
 
     # Add to admin user's profile
-    if [[ -f /home/${ADMIN_USERNAME}/.bashrc ]]; then
-        if ! grep -q "source /etc/docker/docker-aliases.sh" /home/${ADMIN_USERNAME}/.bashrc 2>/dev/null; then
-            append_line "# Docker aliases" /home/${ADMIN_USERNAME}/.bashrc
-            append_line "source /etc/docker/docker-aliases.sh" /home/${ADMIN_USERNAME}/.bashrc
+    if [[ -f "/home/${ADMIN_USERNAME}/.bashrc" ]]; then
+        if ! grep -q "source /etc/docker/docker-aliases.sh" "/home/${ADMIN_USERNAME}/.bashrc" 2>/dev/null; then
+            append_line "# Docker aliases" "/home/${ADMIN_USERNAME}/.bashrc"
+            append_line "source /etc/docker/docker-aliases.sh" "/home/${ADMIN_USERNAME}/.bashrc"
         fi
     fi
 
@@ -1212,11 +1213,11 @@ finalize() {
     echo "      DOCKER CONFIGURATION SUMMARY"
     echo "=========================================="
     echo ""
-    echo -e "${CYAN}Docker Installation:${NC}"
+    printf '%b\n' "${CYAN}Docker Installation:${NC}"
     docker --version
     docker compose version 2>/dev/null || echo "  Docker Compose: Not installed as plugin"
     echo ""
-    echo -e "${CYAN}Docker Daemon Configuration:${NC}"
+    printf '%b\n' "${CYAN}Docker Daemon Configuration:${NC}"
     echo "  Data directory: ${DOCKER_DATA_ROOT:-/var/lib/docker}"
     echo "  Log driver: json-file"
     echo "  Storage driver: overlay2"
@@ -1226,11 +1227,11 @@ finalize() {
         echo "  Metrics endpoint: disabled"
     fi
     echo ""
-    echo -e "${CYAN}User Configuration:${NC}"
+    printf '%b\n' "${CYAN}User Configuration:${NC}"
     echo "  Admin user: $ADMIN_USERNAME"
     echo "  Docker group membership: Required for non-root access"
     echo ""
-    echo -e "${CYAN}Useful Commands:${NC}"
+    printf '%b\n' "${CYAN}Useful Commands:${NC}"
     echo "  View Docker info:        docker info"
     echo "  List containers:         docker ps"
     echo "  List images:             docker images"
@@ -1240,18 +1241,18 @@ finalize() {
     echo "  Config:                  /etc/docker/daemon.json"
     echo ""
     if [[ "$INSTALL_PORTRAINER" == "yes" ]]; then
-        echo -e "${CYAN}Portainer:${NC}"
+        printf '%b\n' "${CYAN}Portainer:${NC}"
         echo "  Access URL: https://$(hostname -I | awk '{print $1}'):9443"
         echo ""
     fi
-    echo -e "${YELLOW}IMPORTANT NEXT STEPS:${NC}"
+    printf '%b\n' "${YELLOW}IMPORTANT NEXT STEPS:${NC}"
     echo "  1. Log out and back in to apply docker group membership"
     echo "  2. Test Docker access: docker ps"
     echo "  3. Review daemon configuration: cat /etc/docker/daemon.json"
     echo "  4. Run monitoring: docker-monitor.sh"
     echo "  5. Create first backup: docker-backup.sh"
     echo ""
-    echo -e "${GREEN}Docker installation completed successfully!${NC}"
+    printf '%b\n' "${GREEN}Docker installation completed successfully!${NC}"
     echo "=========================================="
 
     log_success "Docker setup completed!"
@@ -1277,18 +1278,18 @@ main() {
     done
 
     echo ""
-    echo -e "${WHITE}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${WHITE}║         DOCKER INSTALLATION SCRIPT v${SCRIPT_VERSION}              ║${NC}"
-    echo -e "${WHITE}║                                                        ║${NC}"
-    echo -e "${WHITE}║  This script will install and configure Docker with:   ║${NC}"
-    echo -e "${WHITE}║  - Docker Engine and Docker Compose v2                 ║${NC}"
-    echo -e "${WHITE}║  - Security hardening (AppArmor, seccomp, namespaces)  ║${NC}"
-    echo -e "${WHITE}║  - Optimized daemon configuration                      ║${NC}"
-    echo -e "${WHITE}║  - Firewall rules for Docker ports                     ║${NC}"
-    echo -e "${WHITE}║  - Monitoring and backup automation                    ║${NC}"
-    echo -e "${WHITE}║  - Custom aliases and completions                      ║${NC}"
-    echo -e "${WHITE}║                                                        ║${NC}"
-    echo -e "${WHITE}╚════════════════════════════════════════════════════════╝${NC}"
+    printf '%b\n' "${WHITE}╔════════════════════════════════════════════════════════╗${NC}"
+    printf '%b\n' "${WHITE}║         DOCKER INSTALLATION SCRIPT v${SCRIPT_VERSION}              ║${NC}"
+    printf '%b\n' "${WHITE}║                                                        ║${NC}"
+    printf '%b\n' "${WHITE}║  This script will install and configure Docker with:   ║${NC}"
+    printf '%b\n' "${WHITE}║  - Docker Engine and Docker Compose v2                 ║${NC}"
+    printf '%b\n' "${WHITE}║  - Security hardening (AppArmor, seccomp, namespaces)  ║${NC}"
+    printf '%b\n' "${WHITE}║  - Optimized daemon configuration                      ║${NC}"
+    printf '%b\n' "${WHITE}║  - Firewall rules for Docker ports                     ║${NC}"
+    printf '%b\n' "${WHITE}║  - Monitoring and backup automation                    ║${NC}"
+    printf '%b\n' "${WHITE}║  - Custom aliases and completions                      ║${NC}"
+    printf '%b\n' "${WHITE}║                                                        ║${NC}"
+    printf '%b\n' "${WHITE}╚════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     # Confirm before proceeding
