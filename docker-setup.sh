@@ -889,9 +889,9 @@ echo ""
 printf '%b\n' "${YELLOW}Container Health Status:${NC}"
 docker ps --format '{{.Names}}\t{{.Status}}' | while IFS=$'\t' read -r name status; do
     if echo "$status" | grep -q "Up"; then
-        printf '%b\n' "  ${name}: ${GREEN}${status}${NC}"
+        printf '  %s: %b%s%b\n' "$name" "$GREEN" "$status" "$NC"
     else
-        printf '%b\n' "  ${name}: ${RED}${status}${NC}"
+        printf '  %s: %b%s%b\n' "$name" "$RED" "$status" "$NC"
     fi
 done
 
