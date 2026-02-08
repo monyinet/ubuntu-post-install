@@ -35,7 +35,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Script metadata
-SCRIPT_VERSION="0.3.0"
+SCRIPT_VERSION="0.3.1"
 LOG_FILE="/var/log/docker-setup-$(date +%Y%m%d-%H%M%S).log"
 
 # Dry-run mode

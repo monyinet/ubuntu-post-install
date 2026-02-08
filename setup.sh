@@ -36,7 +36,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Script metadata
-SCRIPT_VERSION="1.0.2"
+SCRIPT_VERSION="1.0.3"
 LOG_FILE="/var/log/ubuntu-setup-$(date +%Y%m%d-%H%M%S).log"
 
 # Dry-run mode (set DRY_RUN=1 to print actions without changing the system)
