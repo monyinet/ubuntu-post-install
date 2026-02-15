@@ -140,15 +140,73 @@ curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/s
 ## What This Script Changes
 
 - APT: updates packages; enables `universe`/`multiverse`; optionally adds PPAs; configures unattended upgrades
-- Users: creates/updates an admin user; configures sudo policies in `/etc/sudoers.d/`
+- Users: creates/updates an admin user; configures sudo policies in `/etc/sudoers.d/`; forces password change on first login
 - SSH: rewrites `/etc/ssh/sshd_config`, sets a login banner, restarts SSH, and enforces key-based access by default
 - Firewall: resets and enables UFW; opens SSH (and optional HTTP/HTTPS/FTP)
+- **Phase 2 Security**: PAM account lockout, password complexity requirements, password aging, file system hardening (/tmp, /var/tmp with noexec)
 - Security hardening: writes sysctl hardening files under `/etc/sysctl.d/`; adds audit rules; sets additional system defaults
 - Shell defaults: writes global shell config (including `/etc/bash.bashrc` and `/etc/zsh/zprofile`)
 - Backups: creates `/usr/local/bin/backup-critical-configs.sh` + a daily cron job
 - Cleanup: removes old logs and clears package caches
 
 The script creates per-run backups of files it overwrites under `BACKUP_DIR/run-<timestamp>/`.
+
+## 🔐 Phase 2 Security Features
+
+Building on the Phase 1 critical security fixes (password expiry, checksum verification, secure installation docs), **Phase 2** focuses on **Access Control & Authentication Hardening**:
+
+### PAM Account Lockout
+- Automatically locks accounts after **5 failed login attempts**
+- **30-minute lockout period** for locked accounts
+- Applies to SSH and local console authentication
+- Prevents brute-force password attacks
+
+### Password Complexity Requirements
+- Minimum **12 characters** password length
+- Must include: **1 uppercase, 1 lowercase, 1 digit, 1 special character**
+- Prevents password reuse (last **5 passwords**)
+- Enforces complexity for all users including root
+- Checks against username and GECOS field
+
+### Password Aging Policies
+- Maximum password age: **90 days**
+- Minimum password age: **1 day** (prevents rapid password changes)
+- Warning period: **7 days** before password expiry
+- Secure UMASK: **077** (restrictive file permissions by default)
+
+### File System Hardening
+- `/tmp` and `/var/tmp` mounted with:
+  - `noexec`: Prevents execution of binaries from temp directories
+  - `nosuid`: Prevents SUID bit exploitation
+  - `nodev`: Prevents device file creation
+- Mitigates privilege escalation attacks
+
+### Enhanced Fail2Ban Protection
+- **SSH protection** (existing): 3 failed attempts → 1-hour ban
+- **Recidive jail** (new): Repeat offenders banned for 24 hours
+- **HTTP/HTTPS attack protection** (when web services enabled):
+  - Authentication failures
+  - Request limit violations
+  - Bad bot detection
+- All banned IPs logged and can trigger email notifications
+
+### Security Benefits
+- **Defense in depth**: Multiple authentication barriers
+- **Compliance**: Meets NIST, CIS benchmark requirements
+- **Attack surface reduction**: File system restrictions prevent privilege escalation
+- **Proactive monitoring**: Enhanced Fail2Ban coverage detects broader attack patterns
+
+### Disabling Phase 2 Features
+
+If you need to disable any Phase 2 features:
+
+```bash
+ENABLE_PAM_FAILLOCK=no \
+ENABLE_PASSWORD_QUALITY=no \
+ENABLE_PASSWORD_AGING=no \
+ENABLE_FILESYSTEM_HARDENING=no \
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash
+```
 
 ## Environment Variables
 
@@ -177,6 +235,11 @@ The script creates per-run backups of files it overwrites under `BACKUP_DIR/run-
 | `BACKUP_RETENTION_DAYS` | `30` | Backup retention for the backup script |
 | `PHP_VERSION` | `8.3` | PHP version label used when adding the Ondřej PHP PPA |
 | `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum (64-character hex string) for verifying downloaded docker-setup.sh integrity. Example: `export DOCKER_SETUP_SHA256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"` |
+| **Phase 2 Security Features** | | |
+| `ENABLE_PAM_FAILLOCK` | `yes` | If `yes`, configures PAM account lockout (5 failed attempts → 30-minute lockout) |
+| `ENABLE_PASSWORD_QUALITY` | `yes` | If `yes`, enforces password complexity (min 12 chars, uppercase, lowercase, digit, special char) |
+| `ENABLE_PASSWORD_AGING` | `yes` | If `yes`, configures password aging (max 90 days, warn 7 days before expiry) |
+| `ENABLE_FILESYSTEM_HARDENING` | `yes` | If `yes`, hardens /tmp and /var/tmp with noexec,nosuid,nodev mount options |
 
 ## SSH Key Setup
 
@@ -212,3 +275,88 @@ Copy the public key into `/home/<admin>/.ssh/authorized_keys`.
 - HTTP/HTTPS/FTP are closed by default.
 - Timeshift is disabled by default for servers.
 - Always verify SSH access before rebooting.
+
+## Troubleshooting Phase 2 Security Features
+
+### Account Locked Out
+
+If a user account gets locked due to failed login attempts (PAM faillock):
+
+```bash
+# Check lock status
+sudo faillock --user <username>
+
+# Unlock the user
+sudo faillock --user <username> --reset
+```
+
+### Password Complexity Errors
+
+If you encounter password complexity errors during password changes:
+
+- Ensure password is at least 12 characters
+- Include at least 1 uppercase letter
+- Include at least 1 lowercase letter
+- Include at least 1 digit
+- Include at least 1 special character
+- Password must not be similar to username or GECOS field
+
+To temporarily disable complexity checks (not recommended):
+
+```bash
+# Edit /etc/security/pwquality.conf and comment out the rules
+sudo nano /etc/security/pwquality.conf
+```
+
+### File System Hardening Issues
+
+If applications fail due to /tmp or /var/tmp restrictions:
+
+```bash
+# Check current mount options
+mount | grep -E "tmp"
+
+# Temporarily remount without noexec (until reboot)
+sudo mount -o remount,exec /tmp
+sudo mount -o remount,exec /var/tmp
+
+# Permanently disable (not recommended)
+export ENABLE_FILESYSTEM_HARDENING=no
+# Then re-run the script
+```
+
+### Disable Specific Phase 2 Features
+
+To disable individual Phase 2 features without affecting others:
+
+```bash
+# Disable PAM account lockout only
+export ENABLE_PAM_FAILLOCK=no
+
+# Disable password complexity only
+export ENABLE_PASSWORD_QUALITY=no
+
+# Disable password aging only
+export ENABLE_PASSWORD_AGING=no
+
+# Disable filesystem hardening only
+export ENABLE_FILESYSTEM_HARDENING=no
+
+# Then run the script
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash
+```
+
+### Restore Original Configuration
+
+All modified files are backed up to `/opt/backups/system-configs/run-<timestamp>/`:
+
+```bash
+# List available backups
+ls -la /opt/backups/system-configs/
+
+# Restore a specific file
+sudo cp /opt/backups/system-configs/run-<timestamp>/etc/pam.d/common-auth /etc/pam.d/common-auth
+
+# Reload PAM configuration
+sudo systemctl restart systemd-logind
+```
