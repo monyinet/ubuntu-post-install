@@ -13,6 +13,8 @@ Focus: SSH hardening, baseline tooling, firewall, monitoring, and sensible defau
 
 ## Quick Start
 
+> **⚠️ Security Note:** The quick installation methods below use `curl | bash`, which executes code directly from the internet. While convenient, this approach is vulnerable to man-in-the-middle attacks and doesn't allow you to inspect the code before execution. For production environments or security-sensitive deployments, please use the [Secure Installation](#secure-installation-recommended) method instead.
+
 Interactive (prompts):
 
 ```bash
@@ -37,6 +39,37 @@ Check/validate only (no changes):
 curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash -s -- --check
 curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash -s -- --validate
 ```
+
+## 🔒 Secure Installation (Recommended)
+
+For enhanced security, download and inspect the script before executing it:
+
+```bash
+# Download the script
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh -o /tmp/setup.sh
+
+# (Optional) Verify checksum against a known-good hash
+# You can obtain checksums from the GitHub releases page:
+# https://github.com/monyinet/ubuntu-post-install/releases
+# Or generate from a specific commit you trust:
+# curl -fsSL "https://raw.githubusercontent.com/monyinet/ubuntu-post-install/<commit-sha>/setup.sh" | sha256sum
+# Example: replace <KNOWN_GOOD_SHA256> with the expected value you obtained
+echo "<KNOWN_GOOD_SHA256>  /tmp/setup.sh" | sha256sum -c -
+
+# Inspect the script content
+less /tmp/setup.sh
+# or
+cat /tmp/setup.sh
+
+# Execute the script
+sudo bash /tmp/setup.sh
+```
+
+This approach allows you to:
+- Review the code before execution
+- Verify the script's integrity (if using checksum verification)
+- Ensure no malicious code has been injected
+- Keep a local copy for auditing purposes
 
 ## Docker (Optional)
 
@@ -143,6 +176,7 @@ The script creates per-run backups of files it overwrites under `BACKUP_DIR/run-
 | `BACKUP_DIR` | `/opt/backups/system-configs` | Backup destination used by the backup script and per-run backups |
 | `BACKUP_RETENTION_DAYS` | `30` | Backup retention for the backup script |
 | `PHP_VERSION` | `8.3` | PHP version label used when adding the Ondřej PHP PPA |
+| `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum (64-character hex string) for verifying downloaded docker-setup.sh integrity. Example: `export DOCKER_SETUP_SHA256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"` |
 
 ## SSH Key Setup
 

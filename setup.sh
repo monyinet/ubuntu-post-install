@@ -99,6 +99,7 @@ ALLOW_FTP="${ALLOW_FTP:-no}"
 DISABLE_IPV6="${DISABLE_IPV6:-no}"
 RUN_DOCKER_SETUP="${RUN_DOCKER_SETUP:-no}"
 DOCKER_SETUP_URL="${DOCKER_SETUP_URL:-https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh}"
+DOCKER_SETUP_SHA256="${DOCKER_SETUP_SHA256:-}"
 
 # Per-run backup location for files modified by this script
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
@@ -630,7 +631,7 @@ Common environment variables:
   ADMIN_PASSWORD, ADMIN_PASSWORD_AUTO_GENERATE, ADMIN_PASSWORD_STORE_DIR
   TIMEZONE, SSH_PORT, SSH_PASSWORD_AUTH, SSH_PUBKEY_PATH, SSH_PUBKEY_CONTENT, GENERATE_SSH_KEYS
   ALLOW_HTTP, ALLOW_HTTPS, ALLOW_FTP, DISABLE_IPV6, ENABLE_TIMESHIFT
-  RUN_DOCKER_SETUP, DOCKER_SETUP_URL
+  RUN_DOCKER_SETUP, DOCKER_SETUP_URL, DOCKER_SETUP_SHA256
 EOF
 }
 
@@ -698,6 +699,7 @@ print_effective_configuration() {
     log_info "  ENABLE_TIMESHIFT=${ENABLE_TIMESHIFT}"
     log_info "  RUN_DOCKER_SETUP=${RUN_DOCKER_SETUP}"
     log_info "  DOCKER_SETUP_URL=${DOCKER_SETUP_URL}"
+    log_info "  DOCKER_SETUP_SHA256=${DOCKER_SETUP_SHA256:+<set>}"
     log_info "  BACKUP_DIR=${BACKUP_DIR}"
     log_info "  BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}"
 }
@@ -737,6 +739,28 @@ run_docker_setup() {
         run_cmd curl -fsSL "$DOCKER_SETUP_URL" -o "$tmp_script"
         run_cmd chmod +x "$tmp_script"
         docker_script="$tmp_script"
+    fi
+
+    # Verify checksum for the selected docker_script if DOCKER_SETUP_SHA256 is provided
+    if [[ -n "${DOCKER_SETUP_SHA256:-}" ]]; then
+        if ! command -v sha256sum >/dev/null 2>&1; then
+            log_error "sha256sum command not found but DOCKER_SETUP_SHA256 is set. Aborting."
+            exit 1
+        fi
+        if [[ ! "$DOCKER_SETUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            log_error "DOCKER_SETUP_SHA256 must be a 64-character hex string. Aborting."
+            exit 1
+        fi
+        log_info "Verifying checksum for $docker_script..."
+        if ! echo "$DOCKER_SETUP_SHA256  $docker_script" | sha256sum -c - >/dev/null 2>&1; then
+            log_error "Checksum verification failed for $docker_script! Aborting."
+            # Clean up temporary script if used
+            if [[ -n "${tmp_script:-}" && -f "$tmp_script" ]]; then
+                rm -f "$tmp_script"
+            fi
+            exit 1
+        fi
+        log_info "Checksum verification passed for $docker_script"
     fi
 
     run_cmd env \
@@ -954,11 +978,18 @@ EOF
             umask 077
             mkdir -p "$cred_dir" 2>/dev/null || true
             chmod 700 "$cred_dir" 2>/dev/null || true
-            printf '%s\n' "$ADMIN_PASSWORD" > "$cred_file"
+            {
+                echo "# WARNING: This file contains a plain text password."
+                echo "# DELETE this file manually after completing initial configuration."
+                echo "# The user will be forced to change this password on first login."
+                echo ""
+                echo "$ADMIN_PASSWORD"
+            } > "$cred_file"
             chmod 600 "$cred_file" 2>/dev/null || true
             ADMIN_PASSWORD_WAS_GENERATED="1"
             ADMIN_PASSWORD_CRED_FILE="$cred_file"
-            log_warn "Generated a random password for $ADMIN_USERNAME and stored it at ${cred_file} (root-only). DELETE after verifying."
+            log_warn "Generated a random password for $ADMIN_USERNAME and stored it at ${cred_file} (root-only)."
+            log_warn "SECURITY: DELETE ${cred_file} after completing initial configuration!"
         fi
     fi
 
@@ -966,8 +997,12 @@ EOF
         log_warn "Setting password for $ADMIN_USERNAME (SSH password auth can remain disabled)"
         if [[ "$DRY_RUN" == "1" ]]; then
             log_info "DRY_RUN: would set password via chpasswd"
+            log_info "DRY_RUN: would force password change on first login via chage"
         else
             printf '%s:%s\n' "$ADMIN_USERNAME" "$ADMIN_PASSWORD" | chpasswd
+            # Force password change on first login for security
+            chage -d 0 "$ADMIN_USERNAME"
+            log_info "User will be required to change password on first login"
         fi
         ADMIN_PASSWORD=""
     else
