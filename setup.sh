@@ -1891,9 +1891,10 @@ configure_pam_faillock() {
     
     # Check if faillock is already configured
     if ! grep -q "pam_faillock.so" /etc/pam.d/common-auth; then
-        # Add faillock before pam_unix.so in common-auth
-        # We need to add it at the right position
-        run_cmd sed -i '/pam_unix.so/i # Account lockout configuration (Phase 2)\nauth    required    pam_faillock.so preauth audit silent deny=5 unlock_time=1800\nauth    [default=die]  pam_faillock.so authfail audit deny=5 unlock_time=1800' /etc/pam.d/common-auth
+        # Add faillock before pam_unix.so in common-auth using multiple commands for clarity
+        run_cmd sed -i '/pam_unix.so/i # Account lockout configuration (Phase 2)' /etc/pam.d/common-auth
+        run_cmd sed -i '/# Account lockout configuration/a auth    required    pam_faillock.so preauth audit silent deny=5 unlock_time=1800' /etc/pam.d/common-auth
+        run_cmd sed -i '/preauth audit silent/a auth    [default=die]  pam_faillock.so authfail audit deny=5 unlock_time=1800' /etc/pam.d/common-auth
         
         # Add faillock to common-account
         if ! grep -q "pam_faillock.so" /etc/pam.d/common-account; then
@@ -2004,11 +2005,15 @@ configure_password_aging() {
     fi
 
     # Set minimum UID/GID for regular users
-    if ! grep -q "^UID_MIN" /etc/login.defs; then
+    if grep -q "^UID_MIN" /etc/login.defs; then
         run_cmd sed -i 's/^UID_MIN.*/UID_MIN\t\t\t1000/' /etc/login.defs
+    else
+        echo "UID_MIN			1000" >> /etc/login.defs
     fi
-    if ! grep -q "^GID_MIN" /etc/login.defs; then
+    if grep -q "^GID_MIN" /etc/login.defs; then
         run_cmd sed -i 's/^GID_MIN.*/GID_MIN\t\t\t1000/' /etc/login.defs
+    else
+        echo "GID_MIN			1000" >> /etc/login.defs
     fi
 
     log_success "Password aging configured: max 90 days, min 1 day, warn 7 days before expiry"
