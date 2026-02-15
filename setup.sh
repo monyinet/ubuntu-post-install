@@ -638,6 +638,9 @@ Common environment variables:
   TIMEZONE, SSH_PORT, SSH_PASSWORD_AUTH, SSH_PUBKEY_PATH, SSH_PUBKEY_CONTENT, GENERATE_SSH_KEYS
   ALLOW_HTTP, ALLOW_HTTPS, ALLOW_FTP, DISABLE_IPV6, ENABLE_TIMESHIFT
   RUN_DOCKER_SETUP, DOCKER_SETUP_URL, DOCKER_SETUP_SHA256
+
+Phase 2 Security (enabled by default):
+  ENABLE_PAM_FAILLOCK, ENABLE_PASSWORD_QUALITY, ENABLE_PASSWORD_AGING, ENABLE_FILESYSTEM_HARDENING
 EOF
 }
 
@@ -708,6 +711,11 @@ print_effective_configuration() {
     log_info "  DOCKER_SETUP_SHA256=${DOCKER_SETUP_SHA256:+<set>}"
     log_info "  BACKUP_DIR=${BACKUP_DIR}"
     log_info "  BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}"
+    log_info "  Phase 2 Security:"
+    log_info "    ENABLE_PAM_FAILLOCK=${ENABLE_PAM_FAILLOCK}"
+    log_info "    ENABLE_PASSWORD_QUALITY=${ENABLE_PASSWORD_QUALITY}"
+    log_info "    ENABLE_PASSWORD_AGING=${ENABLE_PASSWORD_AGING}"
+    log_info "    ENABLE_FILESYSTEM_HARDENING=${ENABLE_FILESYSTEM_HARDENING}"
 }
 
 print_execution_plan() {
@@ -718,6 +726,7 @@ print_execution_plan() {
     log_info "  - Configure SSH server and admin SSH access"
     log_info "  - Configure UFW, Fail2Ban, and AppArmor"
     log_info "  - Optional: Docker installation/config"
+    log_info "  - Phase 2: PAM account lockout, password policies, filesystem hardening"
     log_info "  - Apply sysctl hardening and security tweaks"
     log_info "  - Optional: Timeshift snapshots"
     log_info "  - Install monitoring, audit rules, and backups"
