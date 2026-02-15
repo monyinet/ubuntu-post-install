@@ -48,9 +48,12 @@ For enhanced security, download and inspect the script before executing it:
 # Download the script
 curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh -o /tmp/setup.sh
 
-# (Optional) Verify checksum
-# You can find the latest checksum in the repository's releases or commits
-# sha256sum /tmp/setup.sh
+# (Optional) Verify checksum against a known-good hash
+# You can obtain checksums from the GitHub releases page:
+# https://github.com/monyinet/ubuntu-post-install/releases
+# Or generate from a specific commit you trust:
+# curl -fsSL "https://raw.githubusercontent.com/monyinet/ubuntu-post-install/<commit-sha>/setup.sh" | sha256sum
+sha256sum /tmp/setup.sh
 
 # Inspect the script content
 less /tmp/setup.sh
@@ -172,7 +175,7 @@ The script creates per-run backups of files it overwrites under `BACKUP_DIR/run-
 | `BACKUP_DIR` | `/opt/backups/system-configs` | Backup destination used by the backup script and per-run backups |
 | `BACKUP_RETENTION_DAYS` | `30` | Backup retention for the backup script |
 | `PHP_VERSION` | `8.3` | PHP version label used when adding the Ondřej PHP PPA |
-| `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum for verifying downloaded docker-setup.sh integrity |
+| `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum (64-character hex string) for verifying downloaded docker-setup.sh integrity. Example: `export DOCKER_SETUP_SHA256="abc123..."` |
 
 ## SSH Key Setup
 

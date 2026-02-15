@@ -968,7 +968,7 @@ EOF
             mkdir -p "$cred_dir" 2>/dev/null || true
             chmod 700 "$cred_dir" 2>/dev/null || true
             {
-                echo "# WARNING: This file contains a plaintext password."
+                echo "# WARNING: This file contains a plain text password."
                 echo "# DELETE this file manually after completing initial configuration."
                 echo "# The user will be forced to change this password on first login."
                 echo ""
