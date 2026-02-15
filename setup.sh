@@ -99,6 +99,7 @@ ALLOW_FTP="${ALLOW_FTP:-no}"
 DISABLE_IPV6="${DISABLE_IPV6:-no}"
 RUN_DOCKER_SETUP="${RUN_DOCKER_SETUP:-no}"
 DOCKER_SETUP_URL="${DOCKER_SETUP_URL:-https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh}"
+DOCKER_SETUP_SHA256="${DOCKER_SETUP_SHA256:-}"
 
 # Per-run backup location for files modified by this script
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
@@ -735,6 +736,18 @@ run_docker_setup() {
     else
         tmp_script="$(mktemp /tmp/docker-setup.XXXXXX.sh)"
         run_cmd curl -fsSL "$DOCKER_SETUP_URL" -o "$tmp_script"
+        
+        # Verify checksum if DOCKER_SETUP_SHA256 is provided
+        if [[ -n "$DOCKER_SETUP_SHA256" ]]; then
+            log_info "Verifying checksum for docker-setup.sh..."
+            if ! echo "$DOCKER_SETUP_SHA256  $tmp_script" | sha256sum -c - >/dev/null 2>&1; then
+                log_error "Checksum verification failed for docker-setup.sh! Aborting."
+                rm -f "$tmp_script"
+                exit 1
+            fi
+            log_info "Checksum verification passed for docker-setup.sh"
+        fi
+        
         run_cmd chmod +x "$tmp_script"
         docker_script="$tmp_script"
     fi
@@ -954,11 +967,18 @@ EOF
             umask 077
             mkdir -p "$cred_dir" 2>/dev/null || true
             chmod 700 "$cred_dir" 2>/dev/null || true
-            printf '%s\n' "$ADMIN_PASSWORD" > "$cred_file"
+            {
+                echo "# WARNING: This file contains a plaintext password."
+                echo "# DELETE this file manually after completing initial configuration."
+                echo "# The user will be forced to change this password on first login."
+                echo ""
+                echo "$ADMIN_PASSWORD"
+            } > "$cred_file"
             chmod 600 "$cred_file" 2>/dev/null || true
             ADMIN_PASSWORD_WAS_GENERATED="1"
             ADMIN_PASSWORD_CRED_FILE="$cred_file"
-            log_warn "Generated a random password for $ADMIN_USERNAME and stored it at ${cred_file} (root-only). DELETE after verifying."
+            log_warn "Generated a random password for $ADMIN_USERNAME and stored it at ${cred_file} (root-only)."
+            log_warn "SECURITY: DELETE ${cred_file} after completing initial configuration!"
         fi
     fi
 
@@ -966,8 +986,12 @@ EOF
         log_warn "Setting password for $ADMIN_USERNAME (SSH password auth can remain disabled)"
         if [[ "$DRY_RUN" == "1" ]]; then
             log_info "DRY_RUN: would set password via chpasswd"
+            log_info "DRY_RUN: would force password change on first login via chage"
         else
             printf '%s:%s\n' "$ADMIN_USERNAME" "$ADMIN_PASSWORD" | chpasswd
+            # Force password change on first login for security
+            chage -d 0 "$ADMIN_USERNAME"
+            log_info "User will be required to change password on first login"
         fi
         ADMIN_PASSWORD=""
     else
