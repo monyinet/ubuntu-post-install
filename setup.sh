@@ -631,7 +631,7 @@ Common environment variables:
   ADMIN_PASSWORD, ADMIN_PASSWORD_AUTO_GENERATE, ADMIN_PASSWORD_STORE_DIR
   TIMEZONE, SSH_PORT, SSH_PASSWORD_AUTH, SSH_PUBKEY_PATH, SSH_PUBKEY_CONTENT, GENERATE_SSH_KEYS
   ALLOW_HTTP, ALLOW_HTTPS, ALLOW_FTP, DISABLE_IPV6, ENABLE_TIMESHIFT
-  RUN_DOCKER_SETUP, DOCKER_SETUP_URL
+  RUN_DOCKER_SETUP, DOCKER_SETUP_URL, DOCKER_SETUP_SHA256
 EOF
 }
 
@@ -699,6 +699,7 @@ print_effective_configuration() {
     log_info "  ENABLE_TIMESHIFT=${ENABLE_TIMESHIFT}"
     log_info "  RUN_DOCKER_SETUP=${RUN_DOCKER_SETUP}"
     log_info "  DOCKER_SETUP_URL=${DOCKER_SETUP_URL}"
+    log_info "  DOCKER_SETUP_SHA256=${DOCKER_SETUP_SHA256:+<set>}"
     log_info "  BACKUP_DIR=${BACKUP_DIR}"
     log_info "  BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}"
 }
@@ -736,20 +737,30 @@ run_docker_setup() {
     else
         tmp_script="$(mktemp /tmp/docker-setup.XXXXXX.sh)"
         run_cmd curl -fsSL "$DOCKER_SETUP_URL" -o "$tmp_script"
-        
-        # Verify checksum if DOCKER_SETUP_SHA256 is provided
-        if [[ -n "$DOCKER_SETUP_SHA256" ]]; then
-            log_info "Verifying checksum for docker-setup.sh..."
-            if ! echo "$DOCKER_SETUP_SHA256  $tmp_script" | sha256sum -c - >/dev/null 2>&1; then
-                log_error "Checksum verification failed for docker-setup.sh! Aborting."
-                rm -f "$tmp_script"
-                exit 1
-            fi
-            log_info "Checksum verification passed for docker-setup.sh"
-        fi
-        
         run_cmd chmod +x "$tmp_script"
         docker_script="$tmp_script"
+    fi
+
+    # Verify checksum for the selected docker_script if DOCKER_SETUP_SHA256 is provided
+    if [[ -n "${DOCKER_SETUP_SHA256:-}" ]]; then
+        if ! command -v sha256sum >/dev/null 2>&1; then
+            log_error "sha256sum command not found but DOCKER_SETUP_SHA256 is set. Aborting."
+            exit 1
+        fi
+        if [[ ! "$DOCKER_SETUP_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            log_error "DOCKER_SETUP_SHA256 must be a 64-character hex string. Aborting."
+            exit 1
+        fi
+        log_info "Verifying checksum for $docker_script..."
+        if ! echo "$DOCKER_SETUP_SHA256  $docker_script" | sha256sum -c - >/dev/null 2>&1; then
+            log_error "Checksum verification failed for $docker_script! Aborting."
+            # Clean up temporary script if used
+            if [[ -n "${tmp_script:-}" && -f "$tmp_script" ]]; then
+                rm -f "$tmp_script"
+            fi
+            exit 1
+        fi
+        log_info "Checksum verification passed for $docker_script"
     fi
 
     run_cmd env \

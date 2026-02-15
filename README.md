@@ -13,7 +13,7 @@ Focus: SSH hardening, baseline tooling, firewall, monitoring, and sensible defau
 
 ## Quick Start
 
-> **⚠️ Security Note:** The quick installation methods below use `curl | bash`, which executes code directly from the internet. While convenient, this approach is vulnerable to man-in-the-middle attacks and doesn't allow you to inspect the code before execution. For production environments or security-sensitive deployments, please use the [Secure Installation](#-secure-installation-recommended) method instead.
+> **⚠️ Security Note:** The quick installation methods below use `curl | bash`, which executes code directly from the internet. While convenient, this approach is vulnerable to man-in-the-middle attacks and doesn't allow you to inspect the code before execution. For production environments or security-sensitive deployments, please use the [Secure Installation](#secure-installation-recommended) method instead.
 
 Interactive (prompts):
 
@@ -53,7 +53,8 @@ curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/s
 # https://github.com/monyinet/ubuntu-post-install/releases
 # Or generate from a specific commit you trust:
 # curl -fsSL "https://raw.githubusercontent.com/monyinet/ubuntu-post-install/<commit-sha>/setup.sh" | sha256sum
-sha256sum /tmp/setup.sh
+# Example: replace <KNOWN_GOOD_SHA256> with the expected value you obtained
+echo "<KNOWN_GOOD_SHA256>  /tmp/setup.sh" | sha256sum -c -
 
 # Inspect the script content
 less /tmp/setup.sh
@@ -175,7 +176,7 @@ The script creates per-run backups of files it overwrites under `BACKUP_DIR/run-
 | `BACKUP_DIR` | `/opt/backups/system-configs` | Backup destination used by the backup script and per-run backups |
 | `BACKUP_RETENTION_DAYS` | `30` | Backup retention for the backup script |
 | `PHP_VERSION` | `8.3` | PHP version label used when adding the Ondřej PHP PPA |
-| `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum (64-character hex string) for verifying downloaded docker-setup.sh integrity. Example: `export DOCKER_SETUP_SHA256="abc123..."` |
+| `DOCKER_SETUP_SHA256` | *(unset)* | Optional SHA256 checksum (64-character hex string) for verifying downloaded docker-setup.sh integrity. Example: `export DOCKER_SETUP_SHA256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"` |
 
 ## SSH Key Setup
 
