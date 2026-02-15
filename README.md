@@ -275,3 +275,88 @@ Copy the public key into `/home/<admin>/.ssh/authorized_keys`.
 - HTTP/HTTPS/FTP are closed by default.
 - Timeshift is disabled by default for servers.
 - Always verify SSH access before rebooting.
+
+## Troubleshooting Phase 2 Security Features
+
+### Account Locked Out
+
+If a user account gets locked due to failed login attempts (PAM faillock):
+
+```bash
+# Check lock status
+sudo faillock --user <username>
+
+# Unlock the user
+sudo faillock --user <username> --reset
+```
+
+### Password Complexity Errors
+
+If you encounter password complexity errors during password changes:
+
+- Ensure password is at least 12 characters
+- Include at least 1 uppercase letter
+- Include at least 1 lowercase letter
+- Include at least 1 digit
+- Include at least 1 special character
+- Password must not be similar to username or GECOS field
+
+To temporarily disable complexity checks (not recommended):
+
+```bash
+# Edit /etc/security/pwquality.conf and comment out the rules
+sudo nano /etc/security/pwquality.conf
+```
+
+### File System Hardening Issues
+
+If applications fail due to /tmp or /var/tmp restrictions:
+
+```bash
+# Check current mount options
+mount | grep -E "tmp"
+
+# Temporarily remount without noexec (until reboot)
+sudo mount -o remount,exec /tmp
+sudo mount -o remount,exec /var/tmp
+
+# Permanently disable (not recommended)
+export ENABLE_FILESYSTEM_HARDENING=no
+# Then re-run the script
+```
+
+### Disable Specific Phase 2 Features
+
+To disable individual Phase 2 features without affecting others:
+
+```bash
+# Disable PAM account lockout only
+export ENABLE_PAM_FAILLOCK=no
+
+# Disable password complexity only
+export ENABLE_PASSWORD_QUALITY=no
+
+# Disable password aging only
+export ENABLE_PASSWORD_AGING=no
+
+# Disable filesystem hardening only
+export ENABLE_FILESYSTEM_HARDENING=no
+
+# Then run the script
+curl -fsSL https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/setup.sh | bash
+```
+
+### Restore Original Configuration
+
+All modified files are backed up to `/opt/backups/system-configs/run-<timestamp>/`:
+
+```bash
+# List available backups
+ls -la /opt/backups/system-configs/
+
+# Restore a specific file
+sudo cp /opt/backups/system-configs/run-<timestamp>/etc/pam.d/common-auth /etc/pam.d/common-auth
+
+# Reload PAM configuration
+sudo systemctl restart systemd-logind
+```
