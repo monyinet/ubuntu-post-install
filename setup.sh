@@ -101,6 +101,12 @@ RUN_DOCKER_SETUP="${RUN_DOCKER_SETUP:-no}"
 DOCKER_SETUP_URL="${DOCKER_SETUP_URL:-https://raw.githubusercontent.com/monyinet/ubuntu-post-install/main/docker-setup.sh}"
 DOCKER_SETUP_SHA256="${DOCKER_SETUP_SHA256:-}"
 
+# Phase 2 Security Features (enabled by default)
+ENABLE_PAM_FAILLOCK="${ENABLE_PAM_FAILLOCK:-yes}"
+ENABLE_PASSWORD_QUALITY="${ENABLE_PASSWORD_QUALITY:-yes}"
+ENABLE_PASSWORD_AGING="${ENABLE_PASSWORD_AGING:-yes}"
+ENABLE_FILESYSTEM_HARDENING="${ENABLE_FILESYSTEM_HARDENING:-yes}"
+
 # Per-run backup location for files modified by this script
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 RUN_BACKUP_DIR="${BACKUP_DIR}/run-${RUN_ID}"
@@ -1626,9 +1632,9 @@ configure_firewall() {
 # ============================================================================
 
 configure_fail2ban() {
-    log_info "Configuring Fail2Ban..."
+    log_info "Configuring Fail2Ban with enhanced protection (Phase 2)..."
 
-    # Create jail.local configuration
+    # Create jail.local configuration with extended protection
     backup_file_if_exists /etc/fail2ban/jail.local
     write_file /etc/fail2ban/jail.local << 'EOF'
 [DEFAULT]
@@ -1647,7 +1653,56 @@ logpath = /var/log/auth.log
 maxretry = 3
 bantime = 3600
 findtime = 600
+
+# Phase 2: Recidive jail - ban repeat offenders for longer periods
+[recidive]
+enabled = true
+filter = recidive
+logpath = /var/log/fail2ban.log
+action = %(action_mwl)s
+bantime = 86400
+findtime = 86400
+maxretry = 3
 EOF
+
+    # Add HTTP/HTTPS protection if web services are enabled
+    if [[ "$ALLOW_HTTP" == "yes" || "$ALLOW_HTTPS" == "yes" ]]; then
+        log_info "Adding HTTP/HTTPS attack protection to Fail2Ban..."
+        cat >> /etc/fail2ban/jail.local << 'EOF'
+
+# Phase 2: HTTP authentication failures
+[http-auth]
+enabled = true
+port = http,https
+filter = apache-auth
+logpath = /var/log/apache*/*error.log
+          /var/log/nginx/*error.log
+maxretry = 3
+bantime = 3600
+findtime = 600
+
+# Phase 2: HTTP limit request failures  
+[http-limit-req]
+enabled = true
+port = http,https
+filter = nginx-limit-req
+logpath = /var/log/nginx/*error.log
+maxretry = 10
+bantime = 3600
+findtime = 600
+
+# Phase 2: Bad bot protection
+[http-bad-bot]
+enabled = true
+port = http,https
+filter = apache-badbots
+logpath = /var/log/apache*/*access.log
+          /var/log/nginx/*access.log
+maxretry = 2
+bantime = 86400
+findtime = 600
+EOF
+    fi
 
     # Create SSHd filter
     backup_file_if_exists /etc/fail2ban/filter.d/sshd.conf
@@ -1802,6 +1857,201 @@ EOF
     fi
 
     log_success "Sudo configuration completed"
+}
+
+# ============================================================================
+# PAM AUTHENTICATION HARDENING (PHASE 2)
+# ============================================================================
+
+configure_pam_faillock() {
+    log_info "Configuring PAM account lockout policies (Phase 2 Security)..."
+
+    # Install libpam-modules if not present (faillock is part of this)
+    if ! dpkg -l | grep -q libpam-modules; then
+        log_info "Installing libpam-modules for faillock support..."
+        run_cmd apt-get install -y libpam-modules
+    fi
+
+    # Backup original PAM configuration files
+    backup_file_if_exists /etc/pam.d/common-auth
+    backup_file_if_exists /etc/pam.d/common-account
+
+    # Configure account lockout using pam_faillock
+    # This will lock accounts after 5 failed attempts for 30 minutes
+    log_info "Configuring pam_faillock for failed login tracking..."
+    
+    # Check if faillock is already configured
+    if ! grep -q "pam_faillock.so" /etc/pam.d/common-auth; then
+        # Add faillock before pam_unix.so in common-auth
+        # We need to add it at the right position
+        run_cmd sed -i '/pam_unix.so/i # Account lockout configuration (Phase 2)\nauth    required    pam_faillock.so preauth audit silent deny=5 unlock_time=1800\nauth    [default=die]  pam_faillock.so authfail audit deny=5 unlock_time=1800' /etc/pam.d/common-auth
+        
+        # Add faillock to common-account
+        if ! grep -q "pam_faillock.so" /etc/pam.d/common-account; then
+            run_cmd sed -i '/pam_unix.so/i account required    pam_faillock.so' /etc/pam.d/common-account
+        fi
+        
+        log_success "PAM faillock configured: 5 attempts → 30-minute lockout"
+    else
+        log_info "pam_faillock already configured, skipping..."
+    fi
+
+    log_success "PAM account lockout configuration completed"
+}
+
+configure_password_quality() {
+    log_info "Configuring password complexity requirements (Phase 2 Security)..."
+
+    # Install libpam-pwquality
+    log_info "Installing libpam-pwquality..."
+    run_cmd apt-get install -y libpam-pwquality
+
+    # Backup original configuration
+    backup_file_if_exists /etc/security/pwquality.conf
+    backup_file_if_exists /etc/pam.d/common-password
+
+    # Configure password quality requirements
+    write_file /etc/security/pwquality.conf << 'EOF'
+# Password quality requirements (Phase 2 Security)
+# Minimum password length
+minlen = 12
+
+# Require at least one digit
+dcredit = -1
+
+# Require at least one uppercase character
+ucredit = -1
+
+# Require at least one lowercase character
+lcredit = -1
+
+# Require at least one special character
+ocredit = -1
+
+# Minimum number of character classes required (digit, upper, lower, other)
+minclass = 3
+
+# Maximum number of consecutive characters of the same class
+maxrepeat = 3
+
+# Maximum number of consecutive characters
+maxsequence = 3
+
+# Check against username
+usercheck = 1
+
+# Check against GECOS field
+gecoscheck = 1
+
+# Enforce for root user as well
+enforce_for_root
+EOF
+
+    # Configure PAM to use pwquality
+    if ! grep -q "pam_pwquality.so" /etc/pam.d/common-password; then
+        run_cmd sed -i '/pam_unix.so/i password    requisite    pam_pwquality.so retry=3' /etc/pam.d/common-password
+    fi
+
+    # Configure password history (prevent reuse of last 5 passwords)
+    if ! grep -q "remember=5" /etc/pam.d/common-password; then
+        run_cmd sed -i 's/pam_unix.so.*/& remember=5/' /etc/pam.d/common-password
+    fi
+
+    log_success "Password complexity requirements configured"
+    log_info "Requirements: min 12 chars, 1 uppercase, 1 lowercase, 1 digit, 1 special char"
+    log_info "Password history: last 5 passwords cannot be reused"
+}
+
+configure_password_aging() {
+    log_info "Configuring password aging policies (Phase 2 Security)..."
+
+    # Backup original login.defs
+    backup_file_if_exists /etc/login.defs
+
+    # Configure password aging parameters
+    log_info "Setting password aging in /etc/login.defs..."
+    
+    # Update or add password aging settings
+    run_cmd sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS\t90/' /etc/login.defs
+    run_cmd sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS\t1/' /etc/login.defs
+    run_cmd sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE\t7/' /etc/login.defs
+    
+    # Add if not present
+    if ! grep -q "^PASS_MAX_DAYS" /etc/login.defs; then
+        echo "PASS_MAX_DAYS	90" >> /etc/login.defs
+    fi
+    if ! grep -q "^PASS_MIN_DAYS" /etc/login.defs; then
+        echo "PASS_MIN_DAYS	1" >> /etc/login.defs
+    fi
+    if ! grep -q "^PASS_WARN_AGE" /etc/login.defs; then
+        echo "PASS_WARN_AGE	7" >> /etc/login.defs
+    fi
+
+    # Set secure UMASK
+    log_info "Setting secure UMASK (077)..."
+    run_cmd sed -i 's/^UMASK.*/UMASK\t\t077/' /etc/login.defs
+    if ! grep -q "^UMASK" /etc/login.defs; then
+        echo "UMASK		077" >> /etc/login.defs
+    fi
+
+    # Set minimum UID/GID for regular users
+    if ! grep -q "^UID_MIN" /etc/login.defs; then
+        run_cmd sed -i 's/^UID_MIN.*/UID_MIN\t\t\t1000/' /etc/login.defs
+    fi
+    if ! grep -q "^GID_MIN" /etc/login.defs; then
+        run_cmd sed -i 's/^GID_MIN.*/GID_MIN\t\t\t1000/' /etc/login.defs
+    fi
+
+    log_success "Password aging configured: max 90 days, min 1 day, warn 7 days before expiry"
+    log_info "Secure UMASK set to 077 (restrictive file permissions)"
+}
+
+configure_filesystem_hardening() {
+    log_info "Configuring file system hardening (Phase 2 Security)..."
+
+    # Create systemd mount override for /tmp
+    log_info "Hardening /tmp with noexec,nosuid,nodev..."
+    
+    backup_file_if_exists /etc/systemd/system/tmp.mount.d/options.conf
+    run_cmd mkdir -p /etc/systemd/system/tmp.mount.d
+    
+    write_file /etc/systemd/system/tmp.mount.d/options.conf << 'EOF'
+[Mount]
+Options=mode=1777,strictatime,noexec,nosuid,nodev
+EOF
+
+    # Configure /var/tmp hardening via tmpfiles.d
+    log_info "Hardening /var/tmp with noexec,nosuid,nodev..."
+    
+    backup_file_if_exists /etc/tmpfiles.d/var-tmp.conf
+    write_file /etc/tmpfiles.d/var-tmp.conf << 'EOF'
+# Harden /var/tmp (Phase 2 Security)
+d /var/tmp 1777 root root 30d
+EOF
+
+    # Create fstab entries for hardened /tmp and /var/tmp if they're not separate partitions
+    log_info "Checking /etc/fstab for /tmp and /var/tmp hardening..."
+    
+    backup_file_if_exists /etc/fstab
+    
+    # Only add if not already present and not a separate partition
+    if ! grep -q " /tmp " /etc/fstab; then
+        log_info "Adding /tmp hardening to /etc/fstab (bind mount)..."
+        echo "# Harden /tmp (Phase 2 Security)" >> /etc/fstab
+        echo "tmpfs /tmp tmpfs defaults,noexec,nosuid,nodev,mode=1777 0 0" >> /etc/fstab
+    fi
+    
+    if ! grep -q " /var/tmp " /etc/fstab; then
+        log_info "Adding /var/tmp hardening to /etc/fstab (bind mount)..."
+        echo "# Harden /var/tmp (Phase 2 Security)" >> /etc/fstab
+        echo "tmpfs /var/tmp tmpfs defaults,noexec,nosuid,nodev,mode=1777 0 0" >> /etc/fstab
+    fi
+
+    # Note: The mounts will be applied on next reboot or manual remount
+    log_warn "File system hardening configured. Changes will take effect after reboot."
+    log_info "To apply immediately: sudo systemctl daemon-reload && sudo mount -o remount /tmp && sudo mount -o remount /var/tmp"
+
+    log_success "File system hardening configuration completed"
 }
 
 # ============================================================================
@@ -2484,6 +2734,10 @@ main() {
     normalize_yes_no DISABLE_IPV6
     normalize_yes_no ENABLE_TIMESHIFT
     normalize_yes_no RUN_DOCKER_SETUP
+    normalize_yes_no ENABLE_PAM_FAILLOCK
+    normalize_yes_no ENABLE_PASSWORD_QUALITY
+    normalize_yes_no ENABLE_PASSWORD_AGING
+    normalize_yes_no ENABLE_FILESYSTEM_HARDENING
 
     # Run all configuration steps
     initialize_environment
@@ -2521,6 +2775,27 @@ main() {
     configure_apparmor
     disable_unnecessary_services
     configure_sudo
+    # Phase 2 Security Hardening
+    if [[ "$ENABLE_PAM_FAILLOCK" == "yes" ]]; then
+        configure_pam_faillock
+    else
+        log_info "PAM account lockout is disabled (set ENABLE_PAM_FAILLOCK=yes to enable)"
+    fi
+    if [[ "$ENABLE_PASSWORD_QUALITY" == "yes" ]]; then
+        configure_password_quality
+    else
+        log_info "Password complexity requirements are disabled (set ENABLE_PASSWORD_QUALITY=yes to enable)"
+    fi
+    if [[ "$ENABLE_PASSWORD_AGING" == "yes" ]]; then
+        configure_password_aging
+    else
+        log_info "Password aging policies are disabled (set ENABLE_PASSWORD_AGING=yes to enable)"
+    fi
+    if [[ "$ENABLE_FILESYSTEM_HARDENING" == "yes" ]]; then
+        configure_filesystem_hardening
+    else
+        log_info "File system hardening is disabled (set ENABLE_FILESYSTEM_HARDENING=yes to enable)"
+    fi
     configure_sysctl
     configure_shell
     if [[ "$ENABLE_TIMESHIFT" == "yes" ]]; then
